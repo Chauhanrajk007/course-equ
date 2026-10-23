@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Course Equivalence{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="{{ url_for('index') }}">Presidency University
+    <small>Course Equivalence &amp; Credit Mapping</small></a>
+  <nav><a href="{{ url_for('index') }}">New case</a></nav>
+</header>
+
+<main>{% block content %}{% endblock %}</main>
+
+<footer>Annexure&nbsp;A &middot; generated from the official PRC files in
+  <code>data/prc_db.json</code>. Equivalences are proposed by the engine and are
+  subject to Board of Studies approval.</footer>
+</body>
+</html>

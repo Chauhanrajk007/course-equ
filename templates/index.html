@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Course Equivalence &amp; Credit Mapping{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Course Equivalence &amp; Credit Mapping</h1>
+  <p class="sub">Upload a student report card, map the admission-batch courses onto
+     the current PRC, and generate the signed Annexure&nbsp;A.</p>
+  <div class="batches">
+    {% for b in batches %}
+      <span class="chip {% if b.legacy %}chip-legacy{% endif %}">{{ b.batch }}</span>
+    {% endfor %}
+    <span class="chip chip-muted">{{ batches|length }} PRCs loaded</span>
+  </div>
+</section>
+
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}<div class="flashes">
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  </div>{% endif %}
+{% endwith %}
+
+{% if credit and credit.known and credit.exhausted %}
+<div class="notice warn">
+  <strong>The AI account is out of credit</strong> ({{ credit.remaining }}).
+  Photos cannot be read until the balance is topped up at
+  openrouter.ai/settings/credits.
+  Everything else keeps working &mdash; upload a <b>.docx/.xlsx/.csv/.pdf</b>, or
+  <a href="{{ url_for('manual') }}">enter the courses manually</a>.
+</div>
+{% endif %}
+
+<form class="card" method="post" action="{{ url_for('upload') }}"
+      enctype="multipart/form-data">
+  <h2>1 &middot; Report card</h2>
+  <label class="field">
+    <span>Transcript files or photos <small class="muted">&mdash; select many at once</small></span>
+    <input type="file" name="transcripts" multiple
+           accept=".docx,.xlsx,.xlsm,.csv,.txt,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
+    <small>
+      <b>Files</b> &mdash; .docx, .xlsx, .csv, .pdf containing a table with course
+      codes (e.g. <code>MAT1001</code>). No AI needed.<br>
+      <b>Photos or scans</b> &mdash; .png, .jpg, .webp, .tif, read by a vision
+      model. Add one page per semester, or the whole transcript at once; rows are
+      merged and the page each came from is shown.<br>
+      {% if not llm.available %}
+        <span class="bad">No AI key is set, so photos cannot be read. Use a file,
+        or <a href="{{ url_for('manual') }}">enter the transcript by hand</a>.</span>
+      {% endif %}
+    </small>
+  </label>
+  <p class="altpath">
+    No report card to hand, or the AI service is unavailable?
+    <a class="btn ghost sm" href="{{ url_for('manual') }}">Enter the courses
+      manually</a> &mdash; the list is generated from the PRC, so you only tick
+      what was passed and type the grades.
+  </p>
+
+  <h2>2 &middot; Batches</h2>
+  <div class="row">
+    <label class="field">
+      <span>Admission batch (old PRC)</span>
+      <select name="old_batch" required>
+        {% for b in batches %}
+          <option value="{{ b.batch }}">{{ b.batch }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Readmission batch (new PRC)</span>
+      <select name="new_batch" required>
+        {% for b in batches %}
+          <option value="{{ b.batch }}" {% if b.batch == batches[-1].batch %}selected{% endif %}>
+            {{ b.batch }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Last semester completed</span>
+      <input type="number" name="last_sem" min="0" max="8" placeholder="auto">
+      <small>Leave blank to detect it.</small>
+    </label>
+    <label class="field">
+      <span>Re-entering at semester</span>
+      <input type="number" name="readmit_sem" min="1" max="8" placeholder="auto">
+      <small>Leave blank for last&nbsp;+&nbsp;1.</small>
+    </label>
+  </div>
+
+  <h2>3 &middot; Student particulars <small>(optional)</small></h2>
+  <div class="row">
+    <label class="field"><span>Name</span>
+      <input type="text" name="name" placeholder="auto-detected from file"></label>
+    <label class="field"><span>Roll number</span>
+      <input type="text" name="roll_no" placeholder="e.g. 20241CIT0082"></label>
+    <label class="field"><span>Program</span>
+      <input type="text" name="program" placeholder="e.g. B.Tech CSE (IoT)"></label>
+  </div>
+
+  <label class="check">
+    <input type="checkbox" name="use_llm" value="1" {% if llm.available %}checked{% endif %}
+           {% if not llm.available %}disabled{% endif %}>
+    <span>
+      Ask Grok for a second opinion on courses the rules cannot place confidently
+      {% if llm.available %}
+        <small class="ok">active &mdash; {{ llm.model }}</small>
+      {% else %}
+        <small class="muted">off &mdash; set <code>XAI_API_KEY</code> to enable</small>
+      {% endif %}
+    </span>
+  </label>
+
+  <button class="primary" type="submit">Map courses &rarr;</button>
+</form>
+{% endblock %}

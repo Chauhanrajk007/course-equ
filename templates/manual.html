@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Enter the transcript by hand{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Enter the transcript by hand</h1>
+  <p class="sub">No photo, no AI, no credit balance needed. Choose how many
+     semesters the student completed &mdash; the course list is generated from the
+     admission-batch PRC &mdash; then tick what was passed and type the grades.</p>
+</section>
+
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}<div class="flashes">
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  </div>{% endif %}
+{% endwith %}
+
+<form method="post" action="{{ url_for('manual') }}" class="card">
+  <div class="row">
+    <label class="field"><span>Admission batch (old PRC)</span>
+      <select name="old_batch">
+        {% for b in batches %}
+          <option value="{{ b.batch }}" {% if b.batch == old %}selected{% endif %}>
+            {{ b.batch }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="field"><span>Readmission batch (new PRC)</span>
+      <select name="new_batch">
+        {% for b in batches %}
+          <option value="{{ b.batch }}" {% if b.batch == new %}selected{% endif %}>
+            {{ b.batch }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="field"><span>Semesters completed</span>
+      <input type="number" name="last_sem" min="1" max="8" value="{{ last_sem or 4 }}"
+             onchange="this.form.submit()">
+      <small>Change to redraw the list.</small></label>
+    <label class="field"><span>Re-entering at semester</span>
+      <input type="number" name="readmit_sem" min="1" max="8"
+             value="{{ (last_sem + 1) if last_sem else 5 }}"></label>
+  </div>
+
+  {% if filled %}
+  <div class="row">
+    <label class="field"><span>Name</span>
+      <input type="text" name="name"></label>
+    <label class="field"><span>Roll number</span>
+      <input type="text" name="roll_no"></label>
+    <label class="field"><span>Program</span>
+      <input type="text" name="program"></label>
+  </div>
+
+  <p class="muted">Tick every course the student <b>completed</b>. Leave a grade
+     blank only for a course still in progress; enter <code>F</code> or
+     <code>NP</code> for a failed one.</p>
+
+  <table class="grid">
+    <thead><tr><th>Done</th><th>Course code</th><th>Course name</th>
+      <th>Sem</th><th>Cr</th><th>Basket</th><th>Grade</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="num"><input type="checkbox" name="keep[]" value="{{ r.code }}"
+                               {% if r.ticked %}checked{% endif %}></td>
+        <td><b>{{ r.code }}</b></td>
+        <td>{{ r.name }}</td>
+        <td class="num">{{ r.sem }}</td>
+        <td class="num">{{ r.C }}</td>
+        <td>{{ r.basket }}</td>
+        <td><input class="cell-input num" type="text" name="grade[]"
+                   value="{{ r.grade }}"></td>
+        <input type="hidden" name="credits[]" value="{{ r.C }}">
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <label class="check">
+    <input type="checkbox" name="use_llm" value="1" {% if llm.available %}checked{% endif %}
+           {% if not llm.available %}disabled{% endif %}>
+    <span>Ask the AI for a second opinion on courses the rules cannot place
+      confidently
+      {% if llm.available %}<small class="ok">{{ llm.model }}</small>
+      {% else %}<small class="muted">off &mdash; no API key</small>{% endif %}</span>
+  </label>
+
+  <button class="primary" type="submit">Map these courses &rarr;</button>
+  {% else %}
+  <button class="primary" type="submit">Show the course list &rarr;</button>
+  {% endif %}
+  <a class="btn ghost" href="{{ url_for('index') }}">Back</a>
+</form>
+{% endblock %}

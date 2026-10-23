@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Review mapping{% endblock %}
+
+{% macro pct(v) %}{{ (v * 100) | round | int }}%{% endmacro %}
+
+{% block content %}
+<form method="post" action="{{ url_for('override', cid=c.id) }}">
+<section class="hero compact">
+  <div>
+    <h1>Review the mapping</h1>
+    <p class="sub">
+      {{ student.name or 'Student' }}{% if student.roll_no %} &middot; {{ student.roll_no }}{% endif %}
+      &middot; {{ c.old_batch }} &rarr; {{ c.new_batch }}
+    </p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn ghost" href="{{ url_for('download', cid=c.id) }}">Download PDF</a>
+    <a class="btn ghost" href="{{ url_for('as_json', cid=c.id) }}">Export JSON</a>
+    <button class="primary" type="submit">Apply changes</button>
+  </div>
+</section>
+
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}<div class="flashes">
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  </div>{% endif %}
+{% endwith %}
+
+{% if warnings %}
+<div class="notice">
+  <strong>Read this before approving.</strong>
+  <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<p class="toggle">
+  <a class="btn ghost sm" href="{{ url_for('toggle_llm', cid=c.id) }}">
+    Grok advisor: <b>{{ 'ON' if c.use_llm else 'OFF' }}</b>
+    {% if llm.available %}<small class="ok">{{ llm.model }}</small>
+    {% else %}<small class="muted">no API key</small>{% endif %}
+  </a>
+</p>
+
+<section class="stats">
+  <div class="stat"><b>{{ r.summary[1][2] }}</b><span>mapped (B)</span></div>
+  <div class="stat"><b>{{ r.summary[2][2] }}</b><span>to re-attempt (C)</span></div>
+  <div class="stat"><b>{{ r.summary[3][2] }}</b><span>exempted (D)</span></div>
+  <div class="stat"><b>{{ r.summary[4][2] }}</b><span>additional (E)</span></div>
+  <div class="stat"><b>{{ r.summary[5][2] }}</b><span>remaining (F)</span></div>
+  <div class="stat {{ 'ok' if r.summary_total >= r.credits_required else 'bad' }}">
+    <b>{{ r.summary_total }}</b><span>of {{ r.credits_required }} required</span></div>
+</section>
+
+{% if r.unknown_courses %}
+<div class="notice warn">
+  <strong>{{ r.unknown_courses|length }} course(s) on the report card are not in the
+    {{ c.old_batch }} PRC.</strong> They were matched using the report card alone
+  &mdash; please verify each one.
+</div>
+{% endif %}
+
+<h2>Table I &mdash; course mapping</h2>
+{% for g in r.table1 %}
+<div class="card flush">
+  <h3>Semester {{ g.sem }}
+    <span class="muted">{{ g.new_credits }} credits mapped &middot;
+      {{ g.old_credits }} credits earned</span></h3>
+  <table class="grid">
+    <thead><tr>
+      <th>Mapped to (new PRC {{ c.new_batch }})</th><th>Cr</th><th>Basket</th>
+      <th>Mapped from ({{ c.old_batch }})</th><th>Cr</th>
+      <th>Basket</th><th>Grade / passed</th><th>Basis</th><th>Change it to</th>
+    </tr></thead>
+    <tbody>
+    {% for row in g.rows %}
+      {% set n = row.new %}{% set o = row.old %}
+      <tr class="{{ 'gap' if not o else '' }}">
+        <td><b>{{ n.code }}</b> {{ n.name }}</td>
+        <td class="num">{{ n.C }}</td>
+        <td>{{ n.basket }}</td>
+        {% if o %}
+        <td><b>{{ o.code }}</b> {{ o.name }}</td>
+        <td class="num">{{ o.C }}</td>
+        <td>{{ o.basket }}</td>
+        <td>{{ o.grade or '' }}</td>
+        <td class="basis">{{ row.method }}</td>
+        <td>
+          <select name="map__{{ o.code }}">
+            <option value="">-- exempt --</option>
+            {% for opt in options %}
+              <option value="{{ opt.code }}"
+                {% for pc in row.new_codes %}{% if pc == opt.code %}selected{% endif %}{% endfor %}>
+                {{ opt.code }} &middot; {{ opt.name[:34] }} ({{ opt.C }}cr, {{ opt.basket }})
+              </option>
+            {% endfor %}
+          </select>
+        </td>
+        {% else %}
+        <td colspan="6" class="muted">No equivalent in the {{ c.old_batch }} PRC
+          &mdash; the student must take this course.</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+
+<div class="two">
+  <div class="card">
+    <h2>Table II &mdash; failed / NP <span class="pill">{{ r.table2_total }} cr</span></h2>
+    {% if r.table2 %}<ul class="plain">
+      {% for it in r.table2 %}<li><b>{{ it.course.code }}</b> {{ it.course.name }}
+        <span class="bad">{{ it.course.grade }}</span>
+        <span class="muted">{{ it.credits }} cr</span></li>{% endfor %}
+    </ul>{% else %}<p class="muted">None.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Table III &mdash; exemptions <span class="pill">{{ r.table3_total }} cr</span></h2>
+    {% if r.table3 %}<ul class="plain">
+      {% for it in r.table3 %}<li><b>{{ it.old.code }}</b> {{ it.old.name }}
+        <span class="muted">{{ it.credits }} cr &middot; sem {{ it.old.semester }}</span></li>{% endfor %}
+    </ul>{% else %}<p class="muted">None.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Table IV &mdash; additional <span class="pill">{{ r.table4_total }} cr</span></h2>
+    {% if r.table4 %}<ul class="plain">
+      {% for it in r.table4 %}<li><b>{{ it.code }}</b> {{ it.name }}
+        <span class="muted">{{ it.C }} cr &middot; sem {{ it.sem }}</span>
+        <small class="basis">{{ it.reason }}</small></li>{% endfor %}
+    </ul>{% else %}<p class="muted">None.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Table V &mdash; remove from transcript <span class="pill">{{ r.table5_total }} cr</span></h2>
+    {% if r.table5 %}<ul class="plain">
+      {% for it in r.table5 %}<li><b>{{ it.course.code }}</b> {{ it.course.name }}</li>{% endfor %}
+    </ul>{% else %}<p class="muted">None &mdash; every failed course is already in Table II.</p>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Basket-wise position</h2>
+  <table class="grid">
+    <thead><tr><th>Basket</th><th>Minimum</th><th>Completed</th>
+      <th>Still to earn</th><th>Surplus</th></tr></thead>
+    <tbody>
+    {% for b in r.baskets %}
+      <tr class="{{ 'total' if b.code == 'TOTAL' else '' }}">
+        <td>{{ b.label }}</td><td class="num">{{ b.min }}</td>
+        <td class="num">{{ b.done }}</td><td class="num">{{ b.left }}</td>
+        <td class="num {{ 'surplus' if b.surplus }}">{{ b.surplus }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if r.surplus_total or r.skippable %}
+<div class="card surplus">
+  <h2>Credits in excess &mdash; courses that may be skipped
+    <span class="pill">{{ r.surplus_total }} surplus cr</span></h2>
+  {% if r.surplus_by_basket %}
+  <p class="muted">Already earned beyond the minimum, by basket:
+    {% for bk, v in r.surplus_by_basket.items() %}
+      <span class="chip">{{ bk }} +{{ v }}</span>{% endfor %}</p>
+  {% endif %}
+  {% if r.skippable %}
+  <p>The student holds more credits than these courses require, so the following
+     may be dropped from the semesters ahead. This is an academic decision and
+     pre-requisites are not evaluated.</p>
+  <table class="grid">
+    <thead><tr><th>Course</th><th>Cr</th><th>Basket</th><th>Semester</th>
+      <th>Why</th></tr></thead>
+    <tbody>
+      {% for s in r.skippable %}
+      <tr><td><b>{{ s.code }}</b> {{ s.name }}</td><td class="num">{{ s.C }}</td>
+        <td>{{ s.basket }}</td><td>{{ s.sem }}</td>
+        <td class="basis">{{ s.reason }}</td></tr>
+      {% endfor %}
+      <tr class="total"><td>Total that may be dropped</td>
+        <td class="num">{{ r.skippable_total }}</td><td></td><td></td>
+        <td></td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Surplus credits exist but no later course in the same basket
+     is fully covered by them.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Summary</h2>
+  <table class="grid">
+    <tbody>
+    {% for idx, desc, val in r.summary %}
+      <tr><td class="idx">{{ idx }}</td><td>{{ desc }}</td><td class="num"><b>{{ val }}</b></td></tr>
+    {% endfor %}
+      <tr class="total"><td></td><td>Total (B + C + D + E + F)</td>
+        <td class="num"><b>{{ r.summary_total }}</b></td></tr>
+    </tbody>
+  </table>
+  <p class="{{ 'ok' if r.summary_total >= r.credits_required else 'bad' }}">
+    (B + C + D + E + F) &ge; A &nbsp;&mdash;&nbsp; {{ r.summary_total }} vs {{ r.credits_required }}:
+    {{ 'satisfied' if r.summary_total >= r.credits_required else 'DOES NOT RECONCILE' }}
+    {%- if r.excess_over_requirement %}
+    &middot; student already holds <b>{{ r.excess_over_requirement }}</b> credit(s)
+    more than the PRC requires
+    {%- endif %}</p>
+</div>
+</form>
+{% endblock %}

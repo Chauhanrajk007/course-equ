@@ -1,0 +1,1 @@
+"""Course-equivalence engine package."""

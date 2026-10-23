@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Check what was read{% endblock %}
+
+{% block content %}
+<section class="hero compact">
+  <div>
+    <h1>Check what was read</h1>
+    <p class="sub">
+      {{ c.filenames|length }} file{{ '' if c.filenames|length == 1 else 's' }}
+      &middot; {{ c.records|length }} course{{ '' if c.records|length == 1 else 's' }}
+      &middot; {{ c.old_batch }} &rarr; {{ c.new_batch }}
+      {%- if c.source == 'image' %}
+        &middot; read by {{ c.ocr_meta.provider }} {{ c.ocr_meta.model }}
+      {%- else %} &middot; read from the uploaded file(s){% endif %}
+    </p>
+  </div>
+  <div class="hero-actions">
+    <button class="btn ghost" type="button" onclick="document.getElementById('more').open=true">
+      + Add more pages</button>
+  </div>
+</section>
+
+{% if c.retry_files %}
+<div class="notice warn">
+  <strong>{{ c.retry_files|length }} page(s) could not be read:</strong>
+  {{ c.retry_files|join(', ') }}<br>
+  This is usually the AI gateway being briefly busy, not a bad photo. Wait a
+  minute, then attach the page(s) again below &mdash; the pages that worked are
+  already merged and will not be read twice.
+</div>
+{% endif %}
+
+<details id="more" class="card">
+  <summary><b>Attach or re-attach report-card pages</b> &mdash; other semesters,
+    back pages, summer-term statements, or a page that failed</summary>
+  <form method="post" action="{{ url_for('add_files', cid=c.id) }}"
+        enctype="multipart/form-data">
+    <input type="file" name="transcripts" multiple
+           accept=".docx,.xlsx,.xlsm,.csv,.txt,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
+    <button class="btn ghost" type="submit">Attach and re-check</button>
+  </form>
+</details>
+
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}<div class="flashes">
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  </div>{% endif %}
+{% endwith %}
+
+{% if c.notes %}
+<div class="notice warn"><strong>Reading the source.</strong>
+  <ul>{% for n in c.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('confirm', cid=c.id) }}" class="card">
+  <p class="muted">Nothing is mapped until you confirm. Correct any misread code,
+     grade or semester, untick anything that should be ignored, then continue.
+     {%- if c.filenames|length > 1 %} The <b>Page</b> column shows which file each
+     row came from.{% endif %}</p>
+
+  <table class="grid">
+    <thead><tr>
+      <th>Use</th>{% if c.filenames|length > 1 %}<th>Page</th>{% endif %}
+      <th>Course code</th><th>Course name</th>
+      <th>Credits</th><th>Grade</th><th>Sem</th><th>In {{ c.old_batch }} PRC?</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="{{ 'flag' if r.conflict or not r.in_prc or not r.grade or not r.semester else '' }}">
+        <td class="num"><input type="checkbox" name="keep[]" value="{{ r.code }}" checked></td>
+        {% if c.filenames|length > 1 %}
+        <td class="src" title="{{ r.source_file }}">{{ r.source_file[:16] }}</td>
+        {% endif %}
+        <td><input class="cell-input" type="text" name="code[]" value="{{ r.code }}"></td>
+        <td><input class="cell-input wide" type="text" name="name[]"
+                   value="{{ r.name or r.prc_name }}"></td>
+        <td><input class="cell-input num" type="text" name="credits[]"
+                   value="{{ r.credits if r.credits is not none else '' }}"></td>
+        <td><input class="cell-input num" type="text" name="grade[]"
+                   value="{{ r.grade or '' }}"></td>
+        <td><input class="cell-input num" type="text" name="semester[]"
+                   value="{{ r.semester or '' }}"></td>
+        <td>
+          {%- if r.in_prc -%}
+            <span class="ok">yes &middot; {{ r.prc_basket }}</span>
+          {%- else -%}
+            <span class="bad">not found</span>
+          {%- endif -%}
+          {%- if r.conflict %}
+            <span class="bad">also on {{ r.conflict_with }} &mdash; differs in
+              {{ r.conflict|join(', ') }}; later page used</span>
+          {%- endif %}
+          {%- if not r.grade %}<span class="bad">no grade &rarr; treated as passed</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Student particulars</h2>
+  <div class="row">
+    <label class="field"><span>Name</span>
+      <input type="text" name="name" value="{{ c.student.name }}"></label>
+    <label class="field"><span>Roll number</span>
+      <input type="text" name="roll_no" value="{{ c.student.roll_no }}"></label>
+    <label class="field"><span>Program</span>
+      <input type="text" name="program" value="{{ c.student.program }}"></label>
+    <label class="field"><span>Last semester completed</span>
+      <input type="number" name="last_sem" min="0" max="8"
+             value="{{ c.last_sem }}"></label>
+    <label class="field"><span>Re-entering at semester</span>
+      <input type="number" name="readmit_sem" min="1" max="8"
+             value="{{ c.student.readmit_sem }}"></label>
+  </div>
+
+  <label class="check">
+    <input type="checkbox" name="use_llm" value="1" {% if c.use_llm %}checked{% endif %}
+           {% if not llm.available %}disabled{% endif %}>
+    <span>Ask Grok for a second opinion on courses the rules cannot place
+      confidently
+      {% if llm.available %}<small class="ok">{{ llm.model }}</small>
+      {% else %}<small class="muted">off &mdash; no API key</small>{% endif %}</span>
+  </label>
+
+  <button class="primary" type="submit">Confirm and map courses &rarr;</button>
+  <a class="btn ghost" href="{{ url_for('index') }}">Start over</a>
+</form>
+
+{% if c.images %}
+<details class="card">
+  <summary><b>Original pages</b> ({{ c.images|length }}) &mdash; compare against the table above</summary>
+  <div class="scans">
+    {% for im in c.images %}
+      <figure><img src="data:image/jpeg;base64,{{ im.data }}" alt="{{ im.name }}">
+        <figcaption>{{ im.name }}</figcaption></figure>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+{% endblock %}
