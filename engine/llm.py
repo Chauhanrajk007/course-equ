@@ -81,8 +81,11 @@ def _cfg():
             'label': p['label'], 'env': p['env']}
 
 
-CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          'data', 'llm_cache.json')
+# Vercel's bundle is read-only; /tmp is the only writable location there.
+_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CACHE_DIR = os.environ.get('COURSE_EQUIV_CACHE_DIR') or (
+    '/tmp' if os.environ.get('VERCEL') else os.path.join(_BASE, 'data'))
+CACHE_PATH = os.path.join(_CACHE_DIR, 'llm_cache.json')
 _lock = threading.Lock()
 _cache = None
 
@@ -102,11 +105,14 @@ def _load_cache() -> dict:
 def _save_cache() -> None:
     if _cache is None:
         return
-    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-    tmp = CACHE_PATH + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(_cache, f, indent=1, ensure_ascii=False)
-    os.replace(tmp, CACHE_PATH)
+    try:
+        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+        tmp = CACHE_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(_cache, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, CACHE_PATH)
+    except OSError:
+        pass
 
 
 def _key(old_batch, new_batch, old_code, candidates) -> str:

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+tools/
+data/llm_cache.json
+data/ocr_cache.json
+srv.out
+srv.err
+.env
+.env.*
+!.env.example
+.vercel/

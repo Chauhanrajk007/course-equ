@@ -24,8 +24,10 @@ IMAGE_EXT = set(MIME)
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_SIDE = 1700                       # keeps the request within gateway limits
 
-CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     'data', 'ocr_cache.json')
+_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CACHE_DIR = os.environ.get('COURSE_EQUIV_CACHE_DIR') or (
+    '/tmp' if os.environ.get('VERCEL') else os.path.join(_BASE, 'data'))
+CACHE = os.path.join(_CACHE_DIR, 'ocr_cache.json')
 
 SYSTEM = """You transcribe academic report cards into JSON. Accuracy matters more \
 than completeness.

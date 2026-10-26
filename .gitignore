@@ -1,8 +1,13 @@
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 *.log
 srv.out
 srv.err
 data/*.json
+!data/prc_db.json
 !.gitkeep
+.venv/
+.vercel/
