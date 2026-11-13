@@ -38,6 +38,14 @@
     <label class="field"><span>Re-entering at semester</span>
       <input type="number" name="readmit_sem" min="1" max="8"
              value="{{ (last_sem + 1) if last_sem else 5 }}"></label>
+    <label class="field"><span>Programme</span>
+      <select name="program" onchange="this.form.submit()">
+        {% for p in programs %}
+          <option value="{{ p.code }}" {% if p.code == program %}selected{% endif %}>
+            {{ p.code }} &middot; {{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <small>Change to redraw the list.</small></label>
   </div>
 
   {% if filled %}
@@ -46,8 +54,6 @@
       <input type="text" name="name"></label>
     <label class="field"><span>Roll number</span>
       <input type="text" name="roll_no"></label>
-    <label class="field"><span>Program</span>
-      <input type="text" name="program"></label>
   </div>
 
   <p class="muted">Tick every course the student <b>completed</b>. Leave a grade

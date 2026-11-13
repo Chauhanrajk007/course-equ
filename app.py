@@ -11,6 +11,29 @@ from datetime import timedelta
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                    request, send_file, session, url_for)
 
+
+def _load_env(path: str = '.env') -> None:
+    """Read KEY=VALUE lines from .env into os.environ.
+
+    Values in the file win over the process environment, so editing .env is
+    enough to rotate a key that was also exported at user level. Deployments
+    without a .env file are unaffected - engine.llm reads MAX_TOKENS at import
+    time, hence the call before the engine import below.
+    """
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                os.environ[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+
+
+_load_env(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+
 from engine import llm, ocr, prc, report
 from engine.mapping import Course, build_mapping
 from engine.transcript import ParseError, parse_transcript, to_courses
@@ -38,10 +61,42 @@ STUDENT_FIELDS = ('name', 'roll_no', 'program', 'previous_institution',
 def _batches_for_ui() -> list[dict]:
     out = []
     for b in prc.batches():
-        p = prc.program(b)
-        out.append({'batch': b, 'label': '%s  (%s)' % (b, p['program'][:52]),
-                    'legacy': p.get('legacy_baskets', False)})
+        codes = prc.programs_of(b)
+        progs = prc.programs()
+        p = prc.program(b, codes[0]) if codes else None
+        label = b if not p else '%s  (%s)' % (b, p['program'][:52])
+        out.append({'batch': b, 'label': label,
+                    'programs': [{'code': c, 'name': progs[c]['name']}
+                                 for c in codes],
+                    'legacy': bool(p and p.get('legacy_baskets'))})
     return out
+
+
+def _programs_for_ui() -> list[dict]:
+    progs = prc.programs()
+    return [{'code': c, 'name': progs[c]['name'],
+             'batches': [b for b in prc.batches() if c in prc.programs_of(b)]}
+            for c in sorted(progs)]
+
+
+def _pick_program(old: str, new: str, requested, roll_no=None) -> str | None:
+    """Resolve the programme for a case.
+
+    The programme must exist in both batches.  The operator's choice wins, then
+    the programme code embedded in the roll number (20231CAI0033 -> CAI), then
+    the admission batch's first programme.
+    """
+    for cand in (requested, prc.program_for_roll(roll_no)):
+        if not cand:
+            continue
+        code = prc.resolve_program(old, cand)
+        if code and code in prc.programs_of(new):
+            return code
+    avail = prc.programs_of(old)
+    for code in avail:
+        if code in prc.programs_of(new):
+            return code
+    return prc.resolve_program(old, None)
 
 
 def _case(cid: str) -> dict:
@@ -55,17 +110,20 @@ def _recompute(c: dict) -> dict:
     c['result'] = build_mapping(
         c['old_batch'], c['new_batch'], c['courses'],
         last_completed_sem=c.get('last_sem') or None,
-        lock=c.get('lock'), use_llm=c.get('use_llm', True))
+        lock=c.get('lock'), use_llm=c.get('use_llm', True),
+        program=c.get('program'))
     return c['result']
 
 
 def _new_courses(c: dict) -> list[dict]:
     """Everything the review screen needs to offer as an override target."""
     rows = []
-    for code, rec in sorted(prc.courses(c['new_batch']).items()):
-        rows.append({'code': code, 'name': rec.get('name') or '',
+    for uid, rec in sorted(prc.courses(c['new_batch'], c.get('program')).items(),
+                           key=lambda kv: (kv[1].get('code') or kv[0])):
+        rows.append({'uid': uid, 'code': rec.get('code') or uid,
+                     'name': rec.get('name') or '',
                      'C': rec.get('C'), 'basket': rec.get('basket'),
-                     'sem': rec.get('sem'), 'dept': code[:3]})
+                     'sem': rec.get('sem'), 'dept': (rec.get('code') or uid)[:3]})
     return rows
 
 
@@ -73,6 +131,7 @@ def _new_courses(c: dict) -> list[dict]:
 @app.route('/')
 def index():
     return render_template('index.html', batches=_batches_for_ui(),
+                           programs=_programs_for_ui(),
                            llm=llm.status(), credit=llm.credit_status())
 
 
@@ -81,18 +140,33 @@ def api_batches():
     return jsonify(_batches_for_ui())
 
 
-def _read_one(filename: str, raw: bytes, old: str):
+@app.route('/api/programs')
+def api_programs():
+    return jsonify(_programs_for_ui())
+
+
+def _read_one(filename: str, raw: bytes, old: str, program: str | None = None):
     """-> parsed dict, or raises ValueError with a message fit for the user."""
     ext = os.path.splitext(filename)[1].lower()
     if ext in IMAGE_EXT:
         try:
-            return ocr.transcribe(raw, filename, old)
+            return ocr.transcribe(raw, filename, old, program)
         except (ValueError, RuntimeError) as e:
             raise ValueError('%s: %s' % (filename, e))
     try:
-        return parse_transcript(filename, raw)
+        parsed = parse_transcript(filename, raw)
     except ParseError as e:
         raise ValueError(str(e))
+    # A scanned report card carries no text layer, so table extraction finds
+    # nothing. Fall back to reading the pages with the vision model.
+    if ext == '.pdf' and not parsed.get('records'):
+        try:
+            return ocr.transcribe_pdf(raw, filename, old, program)
+        except (ValueError, RuntimeError) as e:
+            raise ValueError(
+                '%s: this PDF has no readable text layer, so it was sent to the '
+                'vision model, which failed (%s)' % (filename, e))
+    return parsed
 
 
 def _merge(chunks: list[tuple[str, dict]]) -> tuple[list, dict, list]:
@@ -125,10 +199,29 @@ def _merge(chunks: list[tuple[str, dict]]) -> tuple[list, dict, list]:
                     rec['conflict'] = diffs
                     prev['conflict'] = diffs
                     prev['conflict_with'] = fname
-                # the later page wins for any field it actually states
-                for k in ('name', 'credits', 'grade', 'semester'):
-                    if rec.get(k) not in (None, ''):
-                        prev[k] = rec[k]
+                prev_grade = prev.get('grade')
+                rec_grade = rec.get('grade')
+                if rec_grade not in (None, '') and prev_grade not in (None, '') and prev_grade != rec_grade:
+                    p_pass = prc.is_passed(prev_grade)
+                    r_pass = prc.is_passed(rec_grade)
+                    if r_pass and not p_pass:
+                        for k in ('name', 'credits', 'grade', 'semester'):
+                            if rec.get(k) not in (None, ''):
+                                prev[k] = rec[k]
+                    elif p_pass and not r_pass:
+                        pass
+                    else:
+                        for k in ('name', 'credits', 'grade', 'semester'):
+                            if rec.get(k) not in (None, ''):
+                                prev[k] = rec[k]
+                elif rec_grade not in (None, '') and prev_grade in (None, ''):
+                    for k in ('name', 'credits', 'grade', 'semester'):
+                        if rec.get(k) not in (None, ''):
+                            prev[k] = rec[k]
+                else:
+                    for k in ('name', 'credits', 'grade', 'semester'):
+                        if rec.get(k) not in (None, ''):
+                            prev[k] = rec[k]
                 prev.setdefault('also_in', [])
                 if fname not in prev['also_in']:
                     prev['also_in'].append(fname)
@@ -147,9 +240,11 @@ def manual():
     the operator only has to tick what the student completed and type the grades.
     """
     if request.method == 'GET':
+        old, new = prc.batches()[0], prc.batches()[-1]
         return render_template('manual.html', batches=_batches_for_ui(),
-                               rows=[], old=prc.batches()[0],
-                               new=prc.batches()[-1], last_sem=0,
+                               programs=_programs_for_ui(),
+                               rows=[], old=old, new=new, last_sem=0,
+                               program=_pick_program(old, new, None),
                                filled=False, llm=llm.status())
 
     old = prc.resolve_batch(request.form.get('old_batch', ''))
@@ -161,6 +256,8 @@ def manual():
         flash('The readmission batch must be later than the admission batch.',
               'error')
         return redirect(url_for('manual'))
+    program = _pick_program(old, new, request.form.get('program'),
+                            request.form.get('roll_no'))
 
     try:
         last = int(request.form.get('last_sem') or 0)
@@ -176,7 +273,7 @@ def manual():
 
     rows, records = [], []
     seen = set()
-    for sem, courses in prc.semester_courses(old).items():
+    for sem, courses in prc.semester_courses(old, program).items():
         if sem > max(last, 1):
             continue
         for rec in courses:
@@ -211,25 +308,28 @@ def manual():
     if not records:
         flash('Tick at least one completed course.', 'error')
         return render_template('manual.html', batches=_batches_for_ui(),
+                               programs=_programs_for_ui(),
                                rows=rows, old=old, new=new, last_sem=last,
+                               program=program,
                                filled=True, llm=llm.status())
 
     cid = uuid.uuid4().hex
     c = {'id': cid, 'old_batch': old, 'new_batch': new, 'records': records,
+         'program': program,
          'student': {
              'name': (request.form.get('name') or '').strip(),
              'roll_no': (request.form.get('roll_no') or '').strip(),
-             'program': (request.form.get('program') or '').strip(),
+             'program': prc.program(new, program)['program'],
              'previous_institution': '',
-             'school_name': prc.program(new)['school'],
+             'school_name': prc.program(new, program)['school'],
              'admission_batch': old, 'readmission_batch': new,
              'last_sem': str(last), 'readmit_sem': readmit},
          'last_sem': last, 'use_llm': request.form.get('use_llm') == '1',
          'lock': {}, 'filenames': ['entered by hand'], 'source': 'manual',
          'ocr_meta': {}, 'notes': [], 'warnings': [], 'images': [],
          'retry_files': []}
-    c['courses'] = to_courses(records, old)
-    c['warnings'] = _warnings({'records': records}, records, old)
+    c['courses'] = to_courses(records, old, program)
+    c['warnings'] = _warnings({'records': records}, records, old, program)
     _recompute(c)
     CASES[cid] = c
     session['cid'] = cid
@@ -258,6 +358,7 @@ def upload():
         flash('The readmission batch must be later than the admission batch.',
               'error')
         return redirect(url_for('index'))
+    program = _pick_program(old, new, request.form.get('program'))
 
     chunks, failed, blobs = [], [], {}
     gap = float(request.form.get('page_gap') or os.environ.get('PAGE_GAP', '1.5'))
@@ -270,7 +371,7 @@ def upload():
         try:
             if ext in IMAGE_EXT:
                 blobs[f.filename] = raw
-            chunks.append((f.filename, _read_one(f.filename, raw, old)))
+            chunks.append((f.filename, _read_one(f.filename, raw, old, program)))
         except ValueError as e:
             failed.append(str(e))
     if not chunks:
@@ -301,17 +402,21 @@ def upload():
     for _, p in chunks:
         for k in ('model', 'provider', 'dims'):
             meta.setdefault(k, p.get(k))
+    # the roll number carries the programme code; use it when the form is blank
+    program = _pick_program(old, new, program or request.form.get('program'),
+                            request.form.get('roll_no')
+                            or ident.get('roll_no'))
     c = {
         'id': cid, 'old_batch': old, 'new_batch': new,
+        'program': program,
         'records': records,
         'student': {
             'name': (request.form.get('name') or ident.get('name', '')).strip(),
             'roll_no': (request.form.get('roll_no')
                         or ident.get('roll_no', '')).strip(),
-            'program': (request.form.get('program')
-                        or ident.get('program', '')).strip(),
+            'program': prc.program(new, program)['program'],
             'previous_institution': ident.get('previous_institution', ''),
-            'school_name': prc.program(new)['school'],
+            'school_name': prc.program(new, program)['school'],
             'admission_batch': old, 'readmission_batch': new,
             'last_sem': last_sem, 'readmit_sem': readmit_sem,
         },
@@ -378,7 +483,8 @@ def add_files(cid):
             time.sleep(float(os.environ.get('PAGE_GAP', '1.5')))
         try:
             chunks.append((f.filename, _read_one(f.filename, f.read(),
-                                                  c['old_batch'])))
+                                                  c['old_batch'],
+                                                  c.get('program'))))
         except ValueError as e:
             failed.append(str(e))
     for m in failed:
@@ -425,7 +531,7 @@ def confirm(cid):
             except ValueError:
                 cr = None
             sem = sems[i].strip() if i < len(sems) else ''
-            rec = prc.course(c['old_batch'], code)
+            rec = prc.course(c['old_batch'], code, c.get('program'))
             out.append({'code': code,
                         'name': (names[i] if i < len(names) else '').strip()
                                 or (rec or {}).get('name') or '',
@@ -433,7 +539,8 @@ def confirm(cid):
                         'grade': (grades[i] if i < len(grades) else '').strip()
                                  or None,
                         'semester': int(sem) if sem.isdigit() else
-                                    prc.semester_of(c['old_batch'], code),
+                                    prc.semester_of(c['old_batch'], code,
+                                                    c.get('program')),
                         'month_year': '', 'term': '',
                         'in_prc': bool(rec),
                         'prc_basket': (rec or {}).get('basket'),
@@ -443,10 +550,16 @@ def confirm(cid):
             return redirect(url_for('confirm', cid=cid))
 
         c['records'] = out
-        for k in ('name', 'roll_no', 'program'):
+        for k in ('name', 'roll_no'):
             v = (request.form.get(k) or '').strip()
             if v:
                 c['student'][k] = v
+        prog = _pick_program(c['old_batch'], c['new_batch'],
+                             request.form.get('program'),
+                             request.form.get('roll_no'))
+        if prog:
+            c['program'] = prog
+            c['student']['program'] = prc.program(c['new_batch'], prog)['program']
         ls = (request.form.get('last_sem') or '').strip()
         rs = (request.form.get('readmit_sem') or '').strip()
         if ls.isdigit():
@@ -456,22 +569,26 @@ def confirm(cid):
             c['student']['readmit_sem'] = rs
         c['use_llm'] = request.form.get('use_llm') == '1'
 
-        c['courses'] = to_courses(out, c['old_batch'])
-        c['warnings'] = _warnings({'records': out}, out, c['old_batch'])
+        c['courses'] = to_courses(out, c['old_batch'], c.get('program'))
+        c['warnings'] = _warnings({'records': out}, out, c['old_batch'],
+                                  c.get('program'))
         _recompute(c)
         return redirect(url_for('review', cid=cid))
 
     rows = []
     for r in c['records']:
         rows.append({**r,
-                     'prc_name': (prc.course(c['old_batch'], r['code'])
-                                  or {}).get('name') or ''})
-    return render_template('confirm.html', c=c, rows=rows, llm=llm.status())
+                     'prc_name': (prc.course(c['old_batch'], r['code'],
+                                             c.get('program')) or {}).get('name')
+                                 or ''})
+    return render_template('confirm.html', c=c, rows=rows,
+                           programs=_programs_for_ui(), llm=llm.status())
 
 
-def _warnings(parsed, records, batch) -> list[str]:
+def _warnings(parsed, records, batch, program=None) -> list[str]:
     w = []
-    unknown = [r['code'] for r in records if not prc.course(batch, r['code'])]
+    unknown = [r['code'] for r in records
+               if not prc.course(batch, r['code'], program)]
     if unknown:
         w.append('%d course code(s) are not in the %s PRC and were matched on the '
                  'report card alone: %s' % (len(unknown), batch,

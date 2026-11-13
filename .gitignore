@@ -8,6 +8,12 @@ srv.out
 srv.err
 data/*.json
 !data/prc_db.json
+!data/legacy_baskets.json
 !.gitkeep
 .venv/
 .vercel/
+tools/_e2e/
+package-lock.json
+
+# Student transcripts and annexures - never commit (contains PII).
+new data to train/

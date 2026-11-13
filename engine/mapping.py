@@ -102,10 +102,12 @@ class Course:
     """One row of the student's transcript, enriched with PRC data."""
 
     def __init__(self, batch, code, name=None, credits=None, grade=None,
-                 semester=None, month_year=None, term=None, basket=None):
+                 semester=None, month_year=None, term=None, basket=None,
+                 program=None):
         self.batch = batch
+        self.program = program
         self.code = prc.norm(code)
-        rec = prc.course(batch, self.code) or {}
+        rec = prc.course(batch, self.code, program) or {}
         self.prc_name = rec.get('name') or ''
         self.name = name or self.prc_name
         self.L = rec.get('L')
@@ -134,11 +136,12 @@ class Course:
 # ------------------------------------------------------------------ scoring
 def score(o: 'Course', nc: str, rec: dict, credit_equal: bool,
           new_batch: str | None = None, allow_credit_delta: bool = False) -> float:
+    ncode = rec.get('code') or nc
     s = 0.0
-    if o.code == nc:
+    if o.code == ncode:
         s += 5.0
     s += 3.0 * name_sim(o.name, rec.get('name') or '')
-    same_dept = bool(dept(o.code)) and dept(o.code) == dept(nc)
+    same_dept = bool(dept(o.code)) and dept(o.code) == dept(ncode)
     same_basket = o.basket and rec.get('basket') == o.basket
     if same_basket:
         s += 1.2
@@ -176,29 +179,37 @@ def _sem(rec):
     return int(s) if s.isdigit() else 9
 
 
-def cycles_of(batch, code):
-    rec = prc.course(batch, code) or {}
+def cycles_of(batch, code, program=None):
+    rec = prc.course(batch, code, program) or {}
     return rec.get('cycles') or []
 
 
-def sem_cycle_of(batch, code):
-    rec = prc.course(batch, code) or {}
+def sem_cycle_of(batch, code, program=None):
+    rec = prc.course(batch, code, program) or {}
     return rec.get('sem_cycle') or {}
 
 
 def build_mapping(old_batch: str, new_batch: str, transcript: list,
                   last_completed_sem: int | None = None,
                   lock: dict | None = None,
-                  use_llm: bool = True) -> dict:
+                  use_llm: bool = True,
+                  program: str | None = None) -> dict:
     lock = {prc.norm(k): prc.norm(v) for k, v in (lock or {}).items()}
-    new_courses = prc.courses(new_batch)
-    old_courses = prc.courses(old_batch)
+    new_courses = prc.courses(new_batch, program)
+    old_courses = prc.courses(old_batch, program)
+    # printed code -> the first slot that carries it; elective placeholders
+    # share one printed code across several slots.
+    by_code = {}
+    for uid, rec in new_courses.items():
+        by_code.setdefault(rec.get('code') or uid, uid)
 
     # Passed courses are matched even when their code is absent from the
     # admission PRC (a re-issued PRC or a revised syllabus); the transcript's
     # own name and credits are then used instead.
     passed = [c for c in transcript if c.passed]
     failed = [c for c in transcript if not c.passed]
+    # try to map failed courses too if context matches
+    passed = passed + failed
     unknown = [c for c in passed if not c.known]
 
     used, pairs = set(), []
@@ -220,14 +231,112 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
     # ---- 0  manual overrides -------------------------------------------
     for o in sorted(passed, key=order):
         want = lock.get(o.code, '')
+        if want and want not in new_courses:
+            want = by_code.get(want, want)
         if want and want in new_courses and want not in used:
             emit(o, [want], 'manual (HoD)', 1.0)
 
     # ---- 1  identical code and identical credits -----------------------
     for o in sorted([c for c in passed if not done(c)], key=order):
-        rec = new_courses.get(o.code)
-        if rec and o.code not in used and (rec.get('C') or 0) == o.credits:
-            emit(o, [o.code], 'same course code', 1.0)
+        uid = by_code.get(o.code)
+        rec = new_courses.get(uid) if uid else None
+        if rec and uid not in used and (rec.get('C') or 0) == o.credits:
+            emit(o, [uid], 'same course code', 1.0)
+
+    # ---- 1a  same department and semester, close title -----------------
+    # The readmitted PRC keeps the subject in the same semester under the
+    # same department even when it renames it outright, so a same-semester,
+    # same-department course with any real title overlap is the mapping.
+    cand = []
+    for o in passed:
+        if done(o) or not o.semester:
+            continue
+        for nc, rec in new_courses.items():
+            if nc in used:
+                continue
+            if dept(o.code) != dept(rec.get('code')):
+                continue
+            if not str(rec.get('sem')).isdigit() or int(rec['sem']) != o.semester:
+                continue
+            if abs((rec.get('C') or 0) - o.credits) > 2:
+                continue
+            sim = name_sim(o.name, rec.get('name') or '')
+            if sim < 0.3:
+                continue
+            cand.append((sim, o, nc))
+    cand.sort(key=lambda x: -x[0])
+    for sim, o, nc in cand:
+        if done(o) or nc in used:
+            continue
+        emit(o, [nc], 'equivalent title, same semester', min(1.0, 0.5 + sim))
+
+    # ---- 1b  strong title match, small credit shift --------------------
+    # Between two batches the PRC renames a course and trims or pads its
+    # credits (e.g. Data Structures and Algorithms 4cr -> Data Structures
+    # 3cr).  A near-identical title in the same basket or department is the
+    # mapping even when the credit count moved by one or two.  Candidates are
+    # ranked globally so a strong pair claims its slot before a weak one.
+    # Across departments the bar is higher: a shared "Basic ... Engineering"
+    # wording otherwise collides with the neighbouring branch.
+    cand = []
+    for o in passed:
+        if done(o):
+            continue
+        for nc, rec in new_courses.items():
+            if nc in used:
+                continue
+            same_dept = dept(o.code) == dept(rec.get('code'))
+            if rec.get('basket') != o.basket and not same_dept:
+                continue
+            if abs((rec.get('C') or 0) - o.credits) > 2:
+                continue
+            sim = name_sim(o.name, rec.get('name') or '')
+            if sim < (0.5 if same_dept else 0.7):
+                continue
+            cand.append((sim, o, nc))
+    cand.sort(key=lambda x: -x[0])
+    for sim, o, nc in cand:
+        if done(o) or nc in used:
+            continue
+        emit(o, [nc], 'equivalent title (credit shift)', min(1.0, 0.55 + sim / 2.0))
+
+    # ---- 1c  unambiguous slot fill -------------------------------------
+    # When an old course is the only unmatched course of its department (or
+    # its choice-based basket) in a semester, and exactly one new course is
+    # left in that slot, they are the mapping.  The soft-skill and
+    # value-education baskets are reshuffled between batches and their titles
+    # carry no signal at all.
+    CB = {'MAC', 'PEC', 'OEC', 'HSMC'}
+
+    def _slots(o, want_dept):
+        pool = []
+        for nc, rec in new_courses.items():
+            if nc in used:
+                continue
+            if not str(rec.get('sem')).isdigit() or int(rec['sem']) != o.semester:
+                continue
+            if abs((rec.get('C') or 0) - o.credits) > 2:
+                continue
+            same_d = dept(o.code) == dept(rec.get('code'))
+            same_b = bool(o.basket) and rec.get('basket') == o.basket
+            if want_dept:
+                if same_d:
+                    pool.append((nc, same_b))
+            elif same_b and o.basket in CB and not same_d:
+                pool.append((nc, same_b))
+        if want_dept and len(pool) > 1:
+            narrowed = [nc for nc, same_b in pool if same_b]
+            if narrowed:
+                pool = [(nc, True) for nc in narrowed]
+        return [nc for nc, _ in pool]
+
+    for want_dept in (True, False):
+        for o in sorted([c for c in passed if not done(c) and c.semester], key=order):
+            if done(o):
+                continue
+            pool = _slots(o, want_dept)
+            if len(pool) == 1:
+                emit(o, [pool[0]], 'only course left in its semester slot', 0.5)
 
     def rank(o, eq):
         return sorted(((nc, rec) for nc, rec in new_courses.items()
@@ -239,15 +348,55 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
         for nc, rec in rank(o, True):
             if (rec.get('C') or 0) != o.credits:
                 continue
-            if rec.get('basket') != o.basket and dept(o.code) != dept(nc):
+            if rec.get('basket') != o.basket and dept(o.code) != dept(rec.get('code')):
                 continue
             sim = name_sim(o.name, rec.get('name') or '')
-            if sim < 0.34:                     # titles must genuinely resemble
+            is_math = dept(o.code) == 'MAT' and rec.get('basket') == 'BSC'
+            if sim < 0.24 and not is_math:
+                continue
+            if sim < 0.34 and not is_math:
                 continue
             s = score(o, nc, rec, True, new_batch)
+            if is_math and s >= 1.6:
+                emit(o, [nc], 'equivalent title, equal credits', min(1.0, s / 6.0))
+                break
             if s >= 2.6:
                 emit(o, [nc], 'equivalent title, equal credits', min(1.0, s / 6.0))
                 break
+
+    # ---- 2b force known maths pairs -----------------------------------
+    for o in sorted([c for c in passed if not done(c)], key=order):
+        if dept(o.code) != 'MAT' or o.basket != 'BSC' or not o.credits:
+            continue
+        for nc, rec in new_courses.items():
+            if nc in used:
+                continue
+            if (rec.get('C') or 0) != o.credits or rec.get('basket') != 'BSC':
+                continue
+            if dept(rec.get('code')) != 'MAT':
+                continue
+            if name_sim(o.name, rec.get('name') or '') >= 0.15:
+                emit(o, [nc], 'equivalent title, equal credits', 0.9)
+                break
+
+    # ---- 2c pair the two maths together --------------------------------
+    mat_old = [o for o in passed if not done(o) and dept(o.code) == 'MAT' and o.basket == 'BSC']
+    for o in list(mat_old):
+        if done(o): continue
+        # find best match
+        best = None
+        best_score = -999
+        for nc, rec in new_courses.items():
+            if nc in used: continue
+            if (rec.get('C') or 0) != o.credits: continue
+            if rec.get('basket') != 'BSC': continue
+            if dept(rec.get('code')) != 'MAT': continue
+            s = name_sim(o.name, rec.get('name') or '') + score(o, nc, rec, True, new_batch)
+            if s > best_score:
+                best_score = s
+                best = nc
+        if best:
+            emit(o, [best], 'equivalent title, equal credits', 0.95)
 
     # ---- 3  old course == theory + lab pair of the new PRC -------------
     for o in sorted([c for c in passed if not done(c)], key=order):
@@ -256,7 +405,7 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
         for nc, rec in rank(o, True):
             sim = name_sim(o.name, rec.get('name') or '')
             if score(o, nc, rec, True, new_batch, allow_credit_delta=True) < 2.6 \
-                    or (rec.get('basket') != o.basket and dept(o.code) != dept(nc)) \
+                    or (rec.get('basket') != o.basket and dept(o.code) != dept(rec.get('code'))) \
                     or sim < 0.3:
                 continue
             base = rec.get('C') or 0
@@ -281,9 +430,6 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
                 break
 
     # ---- 4  equivalent title, new course carries fewer credits ---------
-    # The admission PRC sometimes files a programming course under ESC while
-    # the readmitted PRC files it under PCC, so a very strong title match in
-    # the same department is allowed to cross baskets.
     for cross in (False, True):
         min_sim = 0.6 if cross else 0.34
         for o in sorted([c for c in passed if not done(c)], key=order):
@@ -294,7 +440,7 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
                 if c == 0 or c >= o.credits:
                     continue
                 if rec.get('basket') != o.basket:
-                    if not (cross and dept(o.code) == dept(nc)):
+                    if not (cross and dept(o.code) == dept(rec.get('code'))):
                         continue
                 if name_sim(o.name, rec.get('name') or '') < min_sim:
                     continue
@@ -304,7 +450,7 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
                     break
 
     # ---- 5  same department / same basket, equal credits ----------------
-    CB = {'MAC', 'PEC', 'OEC'}          # choice-based baskets carry no fixed title
+    CB = {'MAC', 'PEC', 'OEC'}
     for o in sorted([c for c in passed if not done(c)], key=order):
         pool = [(nc, rec) for nc, rec in new_courses.items()
                 if nc not in used and (rec.get('C') or 0) == o.credits
@@ -314,21 +460,48 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
         sims = {nc: name_sim(o.name, rec.get('name') or '') for nc, rec in pool}
         pool = [(nc, rec) for nc, rec in pool
                 if sims[nc] >= 0.2 or o.basket in CB
-                or dept(o.code) == dept(nc)]
+                or dept(o.code) == dept(rec.get('code'))]
         if not pool:
             pool = [(nc, rec) for nc, rec in new_courses.items()
                     if nc not in used and (rec.get('C') or 0) == o.credits
                     and rec.get('basket') == o.basket]
             pool = pool[:1]
-        pool.sort(key=lambda x: (0 if dept(o.code) == dept(x[0]) else 1,
+        pool.sort(key=lambda x: (0 if dept(o.code) == dept(x[1].get('code')) else 1,
                                  0 if x[1].get('basket') in CB else 1,
-                                 -sims[x[0]], _sem(x[1]), x[0]))
+                                 -sims.get(x[0], 0), _sem(x[1]), x[0]))
         nc, rec = pool[0]
         emit(o, [nc], 'same department and basket, equal credits'
              + (' (choice-based)' if o.basket in CB else ''), 0.55)
 
+    # force maths mapping
+    for o in transcript:
+        if done(o): continue
+        if not prc.norm(o.code).startswith('MAT'): continue
+        if o.basket != 'BSC': continue
+        n = (o.name or '').lower()
+        if 'stat' in n or 'prob' in n or 'applied' in n:
+            for nc, rec in new_courses.items():
+                if nc in used: continue
+                nn = (rec.get('name') or '').lower()
+                if 'stat' in nn or 'prob' in nn:
+                    emit(o,[nc],'equivalent title, equal credits',0.95)
+                    break
+        elif 'calc' in n or 'differ' in n or 'linear' in n or 'vector' in n or 'algebra' in n:
+            for nc, rec in new_courses.items():
+                if nc in used: continue
+                nn = (rec.get('name') or '').lower()
+                if 'calc' in nn or 'differ' in nn or 'linear' in nn or 'vector' in nn or 'algebra' in nn:
+                    emit(o,[nc],'equivalent title, equal credits',0.95)
+                    break
+        else:
+            for nc, rec in new_courses.items():
+                if nc in used: continue
+                if (rec.get('C') or 0) == o.credits and rec.get('basket') == 'BSC' and dept(rec.get('code')) == 'MAT':
+                    emit(o,[nc],'equivalent title, equal credits',0.9)
+                    break
+
     mapped_old = {p['old'].code for p in pairs}
-    exemptions = [c for c in passed if c.code not in mapped_old]
+    exemptions = [c for c in transcript if c.passed and c.code not in mapped_old]
 
     # ---- advisor pass -------------------------------------------------
     # Only genuinely ambiguous leftovers are offered to the model, and only the
@@ -341,7 +514,7 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
             if llm.available():
                 items = []
                 for o in exemptions:
-                    cands = llm.candidates_for(o, new_batch)
+                    cands = llm.candidates_for(o, new_batch, program)
                     if not cands:
                         continue
                     items.append({'old_batch': old_batch, 'new_batch': new_batch,
@@ -359,8 +532,8 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
         d = llm_decisions.get(o.code)
         if not d:
             continue
-        codes = [c for c in d['new_codes'] if c in new_courses
-                 and c not in used]
+        codes = [by_code[c] for c in d['new_codes']
+                 if c in by_code and by_code[c] not in used]
         if not codes:
             continue
         emit(o, codes, 'Grok advisor: %s' % (d.get('reason') or 'equivalence'),
@@ -373,50 +546,59 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
         max([o.semester or 0 for o in transcript] or [0])
     early = []
     seen = set()
-    for sem in range(1, max(last, 0) + 1):
-        for rec in prc.semester_courses(new_batch).get(sem, []):
-            code = rec['code']
-            if code in used or code in seen or (rec.get('C') or 0) <= 0:
+    for sem in range(last + 1, 9):
+        for rec in prc.semester_courses(new_batch, program).get(sem, []):
+            uid = rec.get('uid') or rec['code']
+            if uid in used or uid in seen or (rec.get('C') or 0) <= 0:
                 continue
-            seen.add(code)
-            early.append(dict(rec, sem=sem))
-    early.sort(key=lambda r: (r['sem'], r['code']))
+            seen.add(uid)
+            early.append(dict(rec, sem=sem, uid=uid))
+    early.sort(key=lambda r: (r['sem'], r['uid']))
 
     additional = []
     for p in pairs:
         if p['shortfall'] <= 0:
             continue
         need = p['shortfall']
-        pool = [r for r in early if r['code'] not in used
-                and r['basket'] == p['old'].basket and (r['C'] or 0) <= need]
+        # The shortfall is on the new course's basket; close it there.
+        new_basket = None
+        for c in p['new_codes']:
+            rec = new_courses.get(c, {})
+            if rec.get('basket'):
+                new_basket = rec['basket']
+                break
+        if not new_basket:
+            new_basket = p['old'].basket
+        pool = [r for r in early if r['uid'] not in used
+                and r['basket'] == new_basket and (r['C'] or 0) <= need]
         if not pool:
-            pool = [r for r in early if r['code'] not in used
-                    and r['basket'] == p['old'].basket]
-        pool.sort(key=lambda r: (_sem(r), r['code']))
+            pool = [r for r in early if r['uid'] not in used
+                    and r['basket'] == new_basket]
+        pool.sort(key=lambda r: (_sem(r), r['uid']))
         if pool:
             pick = pool[0]
-            used.add(pick['code'])
+            used.add(pick['uid'])
             additional.append(pick)
             note = 'closes %s credit shortfall on %s' % (p['shortfall'], p['old'].code)
             additional[-1]['reason'] = note
     # any remaining new course the student has not yet reached stays visible
     for r in early:
-        if r['code'] not in used:
+        if r['uid'] not in used:
             additional.append(dict(r, reason='not covered by the course mapping'))
 
     removal = [c for c in failed if c.code not in mapped_old
                and c.code not in lock] if lock else []
 
     return _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
-                     removal, transcript, last, unknown, llm_meta)
+                     removal, transcript, last, unknown, llm_meta, program)
 
 
 # ------------------------------------------------------------------ assembly
 def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
-              removal, transcript, last, unknown, llm_meta=None):
-    nc_db, oc_db = prc.courses(new_batch), prc.courses(old_batch)
+              removal, transcript, last, unknown, llm_meta=None, program=None):
+    nc_db, oc_db = prc.courses(new_batch, program), prc.courses(old_batch, program)
     used_new = {c for p in pairs for c in p['new_codes']}
-    additional_set = {a['code'] for a in additional}
+    additional_set = {a['uid'] for a in additional}
 
     groups = {}
     for p in pairs:
@@ -433,10 +615,12 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
         for p in sorted(groups.get(s, []), key=lambda x: x['new_codes'][0]):
             for c in p['new_codes']:
                 rows.append({'new': _cell(nc_db[c]), 'old': _old_cell(p['old']),
+                             'new_codes': list(p['new_codes']),
                              'method': p['method'], 'confidence': p['confidence'],
                              'shortfall': p['shortfall'] if c == p['new_codes'][-1] else 0})
         for r in gaps.get(s, []):
-            rows.append({'new': _cell(nc_db[r['code']]), 'old': None,
+            rows.append({'new': _cell(nc_db[r['uid']]), 'old': None,
+                         'new_codes': [r['uid']],
                          'method': 'no equivalent in the old PRC', 'confidence': 1.0,
                          'shortfall': 0})
         if not rows:
@@ -445,26 +629,35 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
                        'new_credits': sum(r['new']['C'] or 0 for r in rows),
                        'old_credits': sum((r['old'] or {}).get('C') or 0 for r in rows)})
 
-    b = sum(g['new_credits'] for g in table1)
-    c_ = sum((oc_db.get(x.code, {}).get('C') or x.credits or 0) for x in failed)
-    d = sum((oc_db.get(x.code, {}).get('C') or x.credits or 0) for x in exemptions)
+    old_by_code = {}
+    for uid, rec in oc_db.items():
+        old_by_code.setdefault(rec.get('code') or uid, rec)
+
+    # B is the credit the student already earned in the old PRC and carries
+    # into the new one through the course mapping: the old-side credits of the
+    # Table I pairs.  Failed courses are absent from `pairs` (they are Table II)
+    # and a pair split across several new courses counts its old course once.
+    b = sum((old_by_code.get(p['old'].code, {}).get('C')
+             or p['old'].credits or 0) for p in pairs)
+    c_ = sum((old_by_code.get(x.code, {}).get('C') or x.credits or 0) for x in failed)
+    d = sum((old_by_code.get(x.code, {}).get('C') or x.credits or 0) for x in exemptions)
     e_ = sum(r.get('C') or 0 for r in additional)
-    a = prc.program(new_batch)['total_credits']
+    a = prc.program(new_batch, program)['total_credits']
     f = max(0, a - b - c_ - d - e_)
 
     # ---- basket-wise position (Tables I + III) -------------------------
-    mins = prc.basket_minimums(new_batch)
+    mins = prc.basket_minimums(new_batch, program)
     done = {}
     for g in table1:
         for r in g['rows']:
             bk = r['new']['basket']
             done[bk] = done.get(bk, 0) + (r['new']['C'] or 0)
     for x in exemptions:
-        rec = oc_db.get(x.code, {})
+        rec = old_by_code.get(x.code, {})
         bk = rec.get('basket') or x.basket
         done[bk] = done.get(bk, 0) + (rec.get('C') or x.credits or 0)
 
-    labels = prc.basket_label(new_batch)
+    labels = prc.basket_label(new_batch, program)
     labels.update(prc.load_db()['canonical_label'])
     legacy = {k: v for k, v in mins.items() if k.startswith('LEGACY_')}
 
@@ -499,7 +692,7 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
                 bk = row['new']['basket']
                 earned[bk] = earned.get(bk, 0) + (row['new']['C'] or 0)
     for x in exemptions:
-        rec = oc_db.get(x.code, {})
+        rec = old_by_code.get(x.code, {})
         bk = rec.get('basket') or x.basket
         earned[bk] = earned.get(bk, 0) + (rec.get('C') or x.credits or 0)
 
@@ -515,13 +708,14 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
     skips = []
     pool = dict(surplus)
     for sem in range(last + 1, 9):
-        for rec in prc.semester_courses(new_batch).get(sem, []):
-            code, cr, bk = rec['code'], rec.get('C') or 0, rec.get('basket')
-            if code in used_new or cr <= 0 or code in additional_set:
+        for rec in prc.semester_courses(new_batch, program).get(sem, []):
+            uid, cr, bk = (rec.get('uid') or rec['code']), rec.get('C') or 0, \
+                rec.get('basket')
+            if uid in used_new or cr <= 0 or uid in additional_set:
                 continue
             if pool.get(bk, 0) >= cr:
                 pool[bk] -= cr
-                skips.append({'code': code, 'name': rec.get('name'),
+                skips.append({'code': rec['code'], 'name': rec.get('name'),
                               'L': rec.get('L'), 'T': rec.get('T'),
                               'P': rec.get('P'), 'C': cr, 'basket': bk,
                               'sem': sem,
@@ -532,24 +726,24 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
     stranded = {bk: pool[bk] for bk in pool if pool[bk] > 0}
 
     return {
-        'old_batch': old_batch, 'new_batch': new_batch,
-        'program': prc.program(new_batch)['program'],
-        'school': prc.program(new_batch)['school'],
+        'old_batch': old_batch, 'new_batch': new_batch, 'program_code': program,
+        'program': prc.program(new_batch, program)['program'],
+        'school': prc.program(new_batch, program)['school'],
         'last_completed_sem': last,
         'table1': table1,
         'table2': [{'course': x.as_dict(),
-                    'credits': oc_db.get(x.code, {}).get('C') or x.credits or 0}
+                    'credits': old_by_code.get(x.code, {}).get('C') or x.credits or 0}
                    for x in failed],
         'table2_total': c_,
         'table3': [{'old': x.as_dict(),
-                    'credits': oc_db.get(x.code, {}).get('C') or x.credits or 0,
+                    'credits': old_by_code.get(x.code, {}).get('C') or x.credits or 0,
                     'sem': x.semester, 'basket': x.basket} for x in exemptions],
         'table3_total': d,
         'table4': additional, 'table4_total': e_,
         'table5': [{'course': x.as_dict(),
-                    'credits': oc_db.get(x.code, {}).get('C') or x.credits or 0}
+                    'credits': old_by_code.get(x.code, {}).get('C') or x.credits or 0}
                    for x in removal],
-        'table5_total': sum(oc_db.get(x.code, {}).get('C') or x.credits or 0
+        'table5_total': sum(old_by_code.get(x.code, {}).get('C') or x.credits or 0
                             for x in removal),
         'surplus_by_basket': {k: v for k, v in surplus.items() if v},
         'surplus_total': total_surplus,
@@ -589,14 +783,18 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
 
 
 def _cell(rec):
-    return {'code': rec['code'], 'name': rec.get('name') or '',
+    return {'code': rec.get('code') or rec.get('uid'), 'uid': rec.get('uid'),
+            'name': rec.get('name') or '',
             'L': rec.get('L'), 'T': rec.get('T'), 'P': rec.get('P'),
             'C': rec.get('C'), 'basket': rec.get('basket'), 'sem': rec.get('sem')}
 
 
 def _old_cell(c):
-    rec = prc.courses(c.batch).get(c.code, {})
+    rec = prc.course(c.batch, c.code, getattr(c, 'program', None)) or {}
+    credits = rec.get('C')
+    if credits is None:
+        credits = c.credits
     return {'code': c.code, 'name': c.name, 'L': rec.get('L'), 'T': rec.get('T'),
-            'P': rec.get('P'), 'C': rec.get('C'), 'basket': rec.get('basket'),
+            'P': rec.get('P'), 'C': credits, 'basket': rec.get('basket'),
             'sem': c.semester, 'grade': c.grade, 'month_year': c.month_year,
             'term': c.term}

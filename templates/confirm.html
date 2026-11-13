@@ -104,8 +104,13 @@
       <input type="text" name="name" value="{{ c.student.name }}"></label>
     <label class="field"><span>Roll number</span>
       <input type="text" name="roll_no" value="{{ c.student.roll_no }}"></label>
-    <label class="field"><span>Program</span>
-      <input type="text" name="program" value="{{ c.student.program }}"></label>
+    <label class="field"><span>Programme</span>
+      <select name="program">
+        {% for p in programs %}
+          <option value="{{ p.code }}" {% if p.code == c.program %}selected{% endif %}>
+            {{ p.code }} &middot; {{ p.name }}</option>
+        {% endfor %}
+      </select></label>
     <label class="field"><span>Last semester completed</span>
       <input type="number" name="last_sem" min="0" max="8"
              value="{{ c.last_sem }}"></label>

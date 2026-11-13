@@ -259,7 +259,7 @@ def _pick(cells, headers, key):
     return None
 
 
-def to_courses(records: list[dict], batch: str) -> list[Course]:
+def to_courses(records: list[dict], batch: str, program: str | None = None) -> list[Course]:
     out, seen = [], set()
     for r in records:
         code = prc_norm(r.get('code'))
@@ -269,7 +269,8 @@ def to_courses(records: list[dict], batch: str) -> list[Course]:
         cr = r.get('credits')
         cr = int(cr) if cr is not None and float(cr) == int(cr) else cr
         out.append(Course(batch, code, r.get('name') or None, cr, r.get('grade'),
-                          r.get('semester'), r.get('month_year'), r.get('term')))
+                          r.get('semester'), r.get('month_year'), r.get('term'),
+                          program=program))
     return out
 
 

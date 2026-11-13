@@ -87,9 +87,9 @@ def prepare(data: bytes):
     return b64, 'image/png', '%dx%d' % (img.width, img.height)
 
 
-def _cache_key(b64: str, model: str, batch: str) -> str:
+def _cache_key(b64: str, model: str, batch: str, program: str | None = None) -> str:
     return hashlib.sha256(
-        ('%s|%s|%s' % (model, batch, b64[:4096])).encode()).hexdigest()[:32]
+        ('%s|%s|%s|%s' % (model, batch, program or '', b64[:4096])).encode()).hexdigest()[:32]
 
 
 def _load() -> dict:
@@ -111,66 +111,153 @@ def _save(d: dict) -> None:
         pass
 
 
-def transcribe(data: bytes, filename: str, batch: str,
-               use_cache: bool = True) -> dict:
-    """-> {'identity', 'records', 'notes', 'source'}"""
-    # validate the file before anything else, so a corrupt upload is reported as
-    # such even when no AI key is configured
-    b64, mime, dims = prepare(data)
-    if not llm.available():
-        raise RuntimeError(
-            'Reading an image needs an AI key. Set OPENROUTER_API_KEY (or '
-            'GROQ_API_KEY / XAI_API_KEY) and restart, or use "Enter the courses '
-            'manually" which needs no AI at all.')
-
-    cfg = llm._cfg()
-    key = _cache_key(b64, cfg['model'], batch)
-    cache = _load()
-    if use_cache and key in cache:
-        out = dict(cache[key])
-        out['cached'] = True
-        return out
-
-    db = prc.courses(batch)
+def _prompt(batch: str, program: str | None, label: str) -> str:
     # give the model the code list so it can correct its own misreads
-    known = sorted(db)
-    prompt = (
-        'Transcribe the report card in this image.\n'
+    db = prc.courses(batch, program)
+    known = sorted({(r.get('code') or u) for u, r in db.items()})
+    return (
+        'Transcribe %s.\n'
         'The student was admitted to batch %s. These course codes exist in that '
         'PRC - if a printed code is very close to one of them, prefer that exact '
         'spelling:\n%s'
-        % (batch, ', '.join(known[:400])))
+        % (label, batch, ', '.join(known[:400])))
 
+
+def _ask(cfg, prompt: str, b64: str, mime: str) -> dict:
+    """One vision request. Returns the model's parsed JSON object."""
     content = [{'type': 'text', 'text': prompt},
                {'type': 'image_url',
                 'image_url': {'url': 'data:%s;base64,%s' % (mime, b64)}}]
-    body = json.dumps({
+    payload_body = {
         'model': cfg['model'],
         'messages': [{'role': 'system', 'content': SYSTEM},
                      {'role': 'user', 'content': content}],
         'temperature': 0,
-        'max_tokens': llm.MAX_TOKENS,
+        'max_tokens': int(os.environ.get('COURSE_EQUIV_VISION_MAX_TOKENS',
+                                         '4000')),
         'response_format': {'type': 'json_object'},
-    }).encode()
+    }
+    if cfg['model'].endswith(':free'):
+        # free vision models spend the token budget on reasoning first
+        payload_body['reasoning'] = {'enabled': False}
+    body = json.dumps(payload_body).encode()
 
     payload = llm._post(cfg['url'], body, llm._headers(cfg), timeout=200)
-
     try:
         raw = payload['choices'][0]['message']['content']
-        parsed = json.loads(raw if isinstance(raw, str) else json.dumps(raw))
+        return json.loads(raw if isinstance(raw, str) else json.dumps(raw))
     except (ValueError, KeyError, IndexError, TypeError):
         raise RuntimeError('The AI service did not return usable JSON.')
 
-    out = _normalise(parsed, batch)
+
+def _vision_cfg_or_raise():
+    cfg = llm.vision_cfg()
+    if not cfg:
+        raise RuntimeError(
+            'Reading an image needs an AI key with a vision model. Set '
+            'OPENROUTER_API_KEY or XAI_API_KEY (free vision models need no '
+            'credit) and restart, or use "Enter the courses manually" which '
+            'needs no AI at all.')
+    return cfg
+
+
+def transcribe(data: bytes, filename: str, batch: str,
+               program: str | None = None, use_cache: bool = True) -> dict:
+    """-> {'identity', 'records', 'notes', 'source'}"""
+    # validate the file before anything else, so a corrupt upload is reported as
+    # such even when no AI key is configured
+    b64, mime, dims = prepare(data)
+    cfg = _vision_cfg_or_raise()
+
+    key = _cache_key(b64, cfg['model'], batch, program)
+    cache = _load()
+    parsed = cache.get(key) if use_cache else None
+    if not parsed:
+        parsed = _ask(cfg, _prompt(batch, program, 'the report card in this image'),
+                      b64, mime)
+        cache[key] = {k: parsed.get(k) for k in ('identity', 'rows', 'uncertain')}
+        _save(cache)
+    out = _normalise(parsed, batch, program)
     out.update({'source': 'image', 'filename': filename, 'model': cfg['model'],
                 'provider': cfg['label'], 'dims': dims, 'cached': False,
                 'transcribed_at': time.strftime('%Y-%m-%d %H:%M')})
-    cache[key] = {k: out[k] for k in ('identity', 'records', 'notes')}
-    _save(cache)
     return out
 
 
-def _normalise(parsed: dict, batch: str) -> dict:
+def pdf_page_images(data: bytes, dpi: int = 150) -> list:
+    """Render each PDF page to a PIL image. Raises ValueError when it cannot."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        raise ValueError('PDF support needs pypdfium2: pip install pypdfium2')
+    try:
+        doc = pdfium.PdfDocument(io.BytesIO(data))
+    except Exception as e:                                  # noqa: BLE001
+        raise ValueError('That file could not be opened as a PDF (%s).' % e)
+    scale = max(1.0, dpi / 72.0)
+    out = []
+    try:
+        for i in range(len(doc)):
+            page = doc[i]
+            out.append(page.render(scale=scale).to_pil().convert('RGB'))
+    finally:
+        doc.close()
+    return out
+
+
+def transcribe_pdf(data: bytes, filename: str, batch: str,
+                   program: str | None = None, use_cache: bool = True) -> dict:
+    """Read a scanned PDF page by page with the vision model."""
+    cfg = _vision_cfg_or_raise()
+    pages = pdf_page_images(data)
+    if not pages:
+        raise ValueError('The PDF has no pages to read.')
+    total_pages = len(pages)
+    limit = int(os.environ.get('COURSE_EQUIV_MAX_PAGES', '60'))
+    truncated = total_pages > limit
+    pages = pages[:limit]
+    from PIL import Image
+
+    prompt = _prompt(batch, program, 'the report card on this page')
+    cache = _load()
+    merged_rows, identity, uncertain, notes = [], {}, [], []
+    for n, img in enumerate(pages, 1):
+        buf = io.BytesIO()
+        if max(img.size) > MAX_SIDE:
+            ratio = MAX_SIDE / float(max(img.size))
+            img = img.resize((max(1, int(img.width * ratio)),
+                              max(1, int(img.height * ratio))), Image.LANCZOS)
+        img.save(buf, 'PNG', optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        key = _cache_key(b64, cfg['model'], batch, program)
+        parsed = cache.get(key)
+        if not (use_cache and parsed):
+            parsed = _ask(cfg, prompt, b64, 'image/png')
+            cache[key] = {k: parsed.get(k) for k in ('identity', 'rows',
+                                                     'uncertain')}
+        for r in (parsed.get('rows') or []):
+            if isinstance(r, dict):
+                merged_rows.append(r)
+        for k, v in (parsed.get('identity') or {}).items():
+            if v not in (None, '') and identity.get(k) in (None, ''):
+                identity[k] = v
+        uncertain.extend(parsed.get('uncertain') or [])
+    _save(cache)
+
+    if truncated:
+        notes.append('Only the first %d pages were read; the PDF has %d.'
+                     % (limit, total_pages))
+    out = _normalise({'identity': identity, 'rows': merged_rows,
+                      'uncertain': uncertain}, batch, program)
+    out['notes'] = notes + out['notes']
+    out.update({'source': 'pdf-scan', 'filename': filename, 'model': cfg['model'],
+                'provider': cfg['label'], 'dims': '%d page(s)' % len(pages),
+                'cached': False,
+                'transcribed_at': time.strftime('%Y-%m-%d %H:%M')})
+    return out
+
+
+def _normalise(parsed: dict, batch: str, program: str | None = None) -> dict:
     ident_raw = parsed.get('identity') or {}
     notes = []
     records, seen = [], set()
@@ -187,7 +274,7 @@ def _normalise(parsed: dict, batch: str) -> dict:
         if code in seen:
             continue
         seen.add(code)
-        rec = prc.course(batch, code)
+        rec = prc.course(batch, code, program)
         cr = r.get('credits')
         cr = int(cr) if isinstance(cr, (int, float)) else None
         grade = str(r.get('grade') or '').strip() or None
@@ -199,7 +286,7 @@ def _normalise(parsed: dict, batch: str) -> dict:
             if s.isdigit():
                 sem = int(s)
         if sem is None and rec:
-            sem = prc.semester_of(batch, code)
+            sem = prc.semester_of(batch, code, program)
         if cr is None and rec:
             cr = rec.get('C')
         records.append({

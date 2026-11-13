@@ -49,6 +49,16 @@ PROVIDERS = {
     },
 }
 ORDER = ('xai', 'openrouter', 'groq')
+# Image reading needs a multimodal model. The Groq account in use has text
+# models only, so vision defaults to OpenRouter's free models when a key exists.
+VISION = {
+    'openrouter': ['nvidia/nemotron-3.5-super-vl:free',
+                   'dots-studio/dots-3-note-preview:free',
+                   'google/gemma-4-31b-it:free',
+                   'x-ai/grok-4.3'],
+    'xai': ['grok-4-fast-non-reasoning', 'grok-4'],
+    'groq': [],
+}
 UA = 'CourseEquivalence/1.0 (+presidency university academic cell)'
 # A capped ceiling keeps gateway accounts with a low balance from rejecting the
 # request outright, and is ample for the short JSON reply we ask for.
@@ -125,6 +135,26 @@ def api_key() -> str | None:
     return c['key'] if c else None
 
 
+def vision_cfg():
+    """Config for reading an image. Auto picks the first provider that has a
+    vision model and a key; COURSE_EQUIV_VISION_PROVIDER / _MODEL override."""
+    want = (os.environ.get('COURSE_EQUIV_VISION_MODEL') or '').strip()
+    forced = (os.environ.get('COURSE_EQUIV_VISION_PROVIDER') or '').strip().lower()
+    names = ([forced] if forced else []) + [n for n in ORDER if n != forced]
+    for name in names:
+        models = VISION.get(name) or []
+        p = PROVIDERS.get(name)
+        if not p or not models:
+            continue
+        key = (os.environ.get(p['env']) or '').strip()
+        if not key:
+            continue
+        model = want if want in models else models[0]
+        return {'name': name, 'url': p['url'], 'key': key, 'model': model,
+                'label': p['label'], 'env': p['env']}
+    return None
+
+
 def available() -> bool:
     return _cfg() is not None
 
@@ -176,16 +206,18 @@ _credit_cache: dict = {}
 
 
 # ------------------------------------------------------------- candidates
-def candidates_for(o, new_batch: str, limit: int = 10) -> list[dict]:
+def candidates_for(o, new_batch: str, program: str | None = None,
+                   limit: int = 10) -> list[dict]:
     """Shortlist the model is allowed to choose from."""
     out = []
-    for nc, rec in prc.courses(new_batch).items():
+    for uid, rec in prc.courses(new_batch, program).items():
+        code = rec.get('code') or uid
         if (rec.get('C') or 0) > o.credits:
             continue
         if rec.get('basket') != o.basket and \
-                not nc.startswith(o.code[:3]):
+                not code.startswith(o.code[:3]):
             continue
-        out.append({'code': nc, 'name': rec.get('name') or '',
+        out.append({'code': code, 'name': rec.get('name') or '',
                     'credits': rec.get('C') or 0, 'basket': rec.get('basket'),
                     'sem': rec.get('sem')})
     out.sort(key=lambda r: (abs((r['credits'] or 0) - o.credits), r['code']))
@@ -251,6 +283,11 @@ def _post(url: str, body: bytes, headers: dict, timeout: int = 120):
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors='replace')
             last = (e.code, detail)
+            if e.code in (401, 403):
+                raise RuntimeError(
+                    'The AI provider rejected the API key (%s). Check that %s '
+                    'is current, or switch to another provider key.'
+                    % (url.split('/')[2], _provider() or 'the key'))
             if e.code in (402, 408, 409, 429, 500, 502, 503, 529):
                 budget = 'in_flight_budget_exhausted' in detail
                 # a budget rejection needs a longer settle than a rate limit
@@ -265,7 +302,9 @@ def _post(url: str, body: bytes, headers: dict, timeout: int = 120):
             continue
     code, detail = last or (0, 'no response')
     if 'in_flight_budget' in detail or code in (402, 429):
-        if 'add credits' in detail or 'available credits' in detail:
+        low = detail.lower()
+        if ('add credits' in low or 'available credits' in low
+                or 'requires more credits' in low or 'can only afford' in low):
             raise RuntimeError(
                 'The AI account has no credit left, so this page cannot be read. '
                 'Top up the balance, or use "Enter the courses manually" - it '

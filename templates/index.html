@@ -87,14 +87,26 @@
     </label>
   </div>
 
+  <div class="row">
+    <label class="field">
+      <span>Programme</span>
+      <select name="program">
+        <option value="">-- detect from the roll number --</option>
+        {% for p in programs %}
+          <option value="{{ p.code }}">{{ p.code }} &middot; {{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <small>Each programme has its own course grid for a batch. Detected from the
+        roll number (20241CIT0082 &rarr; CIT) when left blank.</small>
+    </label>
+  </div>
+
   <h2>3 &middot; Student particulars <small>(optional)</small></h2>
   <div class="row">
     <label class="field"><span>Name</span>
       <input type="text" name="name" placeholder="auto-detected from file"></label>
     <label class="field"><span>Roll number</span>
       <input type="text" name="roll_no" placeholder="e.g. 20241CIT0082"></label>
-    <label class="field"><span>Program</span>
-      <input type="text" name="program" placeholder="e.g. B.Tech CSE (IoT)"></label>
   </div>
 
   <label class="check">

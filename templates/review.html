@@ -88,8 +88,8 @@
           <select name="map__{{ o.code }}">
             <option value="">-- exempt --</option>
             {% for opt in options %}
-              <option value="{{ opt.code }}"
-                {% for pc in row.new_codes %}{% if pc == opt.code %}selected{% endif %}{% endfor %}>
+              <option value="{{ opt.uid }}"
+                {% for pc in row.new_codes %}{% if pc == opt.uid %}selected{% endif %}{% endfor %}>
                 {{ opt.code }} &middot; {{ opt.name[:34] }} ({{ opt.C }}cr, {{ opt.basket }})
               </option>
             {% endfor %}
