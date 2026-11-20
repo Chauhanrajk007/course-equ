@@ -142,7 +142,32 @@ def _ask(cfg, prompt: str, b64: str, mime: str) -> dict:
         payload_body['reasoning'] = {'enabled': False}
     body = json.dumps(payload_body).encode()
 
-    payload = llm._post(cfg['url'], body, llm._headers(cfg), timeout=200)
+    try:
+        payload = llm._post(cfg['url'], body, llm._headers(cfg), timeout=60)
+    except Exception as err:
+        # Fallback to secondary vision provider if available
+        fallback_cfg = None
+        if cfg['name'] == 'groq' and (os.environ.get('OPENROUTER_API_KEY') or '').strip():
+            fallback_cfg = {'name': 'openrouter', 'url': 'https://openrouter.ai/api/v1/chat/completions',
+                            'key': os.environ['OPENROUTER_API_KEY'].strip(),
+                            'model': 'nvidia/nemotron-3.5-super-vl:free', 'label': 'OpenRouter'}
+        elif cfg['name'] == 'openrouter' and (os.environ.get('GROQ_API_KEY') or '').strip():
+            fallback_cfg = {'name': 'groq', 'url': 'https://api.groq.com/openai/v1/chat/completions',
+                            'key': os.environ['GROQ_API_KEY'].strip(),
+                            'model': 'qwen/qwen3.8-27b', 'label': 'Groq'}
+        if fallback_cfg:
+            try:
+                payload_body['model'] = fallback_cfg['model']
+                if fallback_cfg['model'].endswith(':free'):
+                    payload_body['reasoning'] = {'enabled': False}
+                else:
+                    payload_body.pop('reasoning', None)
+                fb_body = json.dumps(payload_body).encode()
+                payload = llm._post(fallback_cfg['url'], fb_body, llm._headers(fallback_cfg), timeout=60)
+            except Exception:
+                raise err
+        else:
+            raise err
     try:
         raw = payload['choices'][0]['message']['content']
         return json.loads(raw if isinstance(raw, str) else json.dumps(raw))
