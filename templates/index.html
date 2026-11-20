@@ -23,9 +23,7 @@
 {% if credit and credit.known and credit.exhausted %}
 <div class="notice warn">
   <strong>The AI account is out of credit</strong> ({{ credit.remaining }}).
-  Photos cannot be read until the balance is topped up at
-  openrouter.ai/settings/credits.
-  Everything else keeps working &mdash; upload a <b>.docx/.xlsx/.csv/.pdf</b>, or
+  Scanned photos require an active AI key with credits, or you can upload a <b>.docx/.xlsx/.csv/.pdf</b>, or
   <a href="{{ url_for('manual') }}">enter the courses manually</a>.
 </div>
 {% endif %}

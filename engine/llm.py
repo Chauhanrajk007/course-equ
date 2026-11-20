@@ -194,11 +194,12 @@ def credit_status(force: bool = False) -> dict:
                                               'User-Agent': UA})
         with urllib.request.urlopen(req, timeout=20) as r:
             d = json.loads(r.read().decode()).get('data', {})
+        model = c.get('model') or ''
+        is_free_model = ':free' in model
+        rem = round((d.get('total_credits') or 0) - (d.get('total_usage') or 0), 4)
         val = {'known': True,
-               'remaining': round((d.get('total_credits') or 0)
-                                  - (d.get('total_usage') or 0), 4),
-               'exhausted': ((d.get('total_credits') or 0)
-                              - (d.get('total_usage') or 0)) <= 0}
+               'remaining': rem,
+               'exhausted': rem <= 0 and not is_free_model}
     except Exception:                                        # noqa: BLE001
         val = {'known': False}
     with _lock:
