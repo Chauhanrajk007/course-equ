@@ -399,8 +399,10 @@ def upload():
             if ext in IMAGE_EXT:
                 blobs[f.filename] = raw
             chunks.append((f.filename, _read_one(f.filename, raw, old, program)))
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             failed.append(str(e))
+        except Exception as e:
+            failed.append(f'{f.filename}: {e}')
     if not chunks:
         for m in failed:
             flash(m, 'error')
@@ -530,8 +532,10 @@ def add_files(cid):
             chunks.append((f.filename, _read_one(f.filename, raw,
                                                   c['old_batch'],
                                                   c.get('program'))))
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             failed.append(str(e))
+        except Exception as e:
+            failed.append(f'{f.filename}: {e}')
     for m in failed:
         flash(m, 'error')
     if not chunks:
