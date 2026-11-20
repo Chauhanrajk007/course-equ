@@ -22,7 +22,7 @@ MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.tif': 'image/tiff', '.tiff': 'image/tiff'}
 IMAGE_EXT = set(MIME)
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
-MAX_SIDE = 1700                       # keeps the request within gateway limits
+MAX_SIDE = 1200                       # keeps image crisp while minimizing payload & upload time
 
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CACHE_DIR = os.environ.get('COURSE_EQUIV_CACHE_DIR') or (
@@ -82,9 +82,9 @@ def prepare(data: bytes):
         img = img.resize((max(1, int(img.width * ratio)),
                           max(1, int(img.height * ratio))), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, 'PNG', optimize=True)
+    img.save(buf, 'JPEG', quality=85)
     b64 = base64.b64encode(buf.getvalue()).decode()
-    return b64, 'image/png', '%dx%d' % (img.width, img.height)
+    return b64, 'image/jpeg', '%dx%d' % (img.width, img.height)
 
 
 def _cache_key(b64: str, model: str, batch: str, program: str | None = None) -> str:
@@ -257,13 +257,13 @@ def transcribe_pdf(data: bytes, filename: str, batch: str,
             ratio = MAX_SIDE / float(max(img.size))
             img = img.resize((max(1, int(img.width * ratio)),
                               max(1, int(img.height * ratio))), Image.LANCZOS)
-        img.save(buf, 'PNG', optimize=True)
+        img.save(buf, 'JPEG', quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
         key = _cache_key(b64, cfg['model'], batch, program)
         with cache_lock:
             parsed = cache.get(key)
         if not (use_cache and parsed):
-            parsed = _ask(cfg, prompt, b64, 'image/png')
+            parsed = _ask(cfg, prompt, b64, 'image/jpeg')
             with cache_lock:
                 cache[key] = {k: parsed.get(k) for k in ('identity', 'rows',
                                                          'uncertain')}
