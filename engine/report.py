@@ -259,15 +259,23 @@ class Report:
     def _passing(o):
         if not o:
             return ''
-        bits = [str(o.get('semester') or '')]
+        parts = []
+        sem = o.get('sem') or o.get('semester')
+        if sem:
+            s_str = str(sem).strip()
+            suffix = 'th'
+            if s_str in ('1', 'I'): suffix = 'st'
+            elif s_str in ('2', 'II'): suffix = 'nd'
+            elif s_str in ('3', 'III'): suffix = 'rd'
+            parts.append(f'{s_str}{suffix} Sem' if s_str.isdigit() else f'Sem {s_str}')
         if o.get('month_year'):
-            bits.append(str(o['month_year']))
-        bits = ' '.join(x for x in bits if x)
-        if o.get('grade'):
-            bits += ' - %s GRADE' % o['grade']
+            parts.append(str(o['month_year']).strip())
         if o.get('term'):
-            bits += ' (%s)' % o['term']
-        return bits.strip()
+            parts.append(str(o['term']).strip().upper())
+        grade = str(o.get('grade') or '').strip().upper()
+        if grade:
+            parts.append(f'Grade: {grade}' if grade != 'F' else 'F Grade')
+        return ', '.join(parts) if parts else '-'
 
     # ----------------------------------------------------------- Tables
     def _title(self, txt):

@@ -541,26 +541,29 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
     exemptions = [c for c in passed if c.code not in
                   {p['old'].code for p in pairs}]
 
-    # ---- Table IV: close the credit shortfalls, then cover gaps ---------
+    # ---- Table IV: missed earlier courses (sem 1..last) and credit shortfalls -
     last = last_completed_sem if last_completed_sem is not None else \
         max([o.semester or 0 for o in transcript] or [0])
-    early = []
-    seen = set()
-    for sem in range(last + 1, 9):
-        for rec in prc.semester_courses(new_batch, program).get(sem, []):
-            uid = rec.get('uid') or rec['code']
-            if uid in used or uid in seen or (rec.get('C') or 0) <= 0:
-                continue
-            seen.add(uid)
-            early.append(dict(rec, sem=sem, uid=uid))
-    early.sort(key=lambda r: (r['sem'], r['uid']))
 
     additional = []
+    seen_add = set()
+
+    # 1. Missed courses in new curriculum for semesters 1..last not covered by mapping
+    for sem in range(1, last + 1):
+        for rec in prc.semester_courses(new_batch, program).get(sem, []):
+            uid = rec.get('uid') or rec['code']
+            cr = rec.get('C') or 0
+            if uid in used or uid in seen_add or cr <= 0:
+                continue
+            seen_add.add(uid)
+            additional.append(dict(rec, sem=sem, uid=uid,
+                                   reason='Not completed in previous batch (Sem %s)' % sem))
+
+    # 2. Shortfall closure if any pair left a credit deficit
     for p in pairs:
         if p['shortfall'] <= 0:
             continue
         need = p['shortfall']
-        # The shortfall is on the new course's basket; close it there.
         new_basket = None
         for c in p['new_codes']:
             rec = new_courses.get(c, {})
@@ -569,22 +572,17 @@ def build_mapping(old_batch: str, new_batch: str, transcript: list,
                 break
         if not new_basket:
             new_basket = p['old'].basket
-        pool = [r for r in early if r['uid'] not in used
-                and r['basket'] == new_basket and (r['C'] or 0) <= need]
-        if not pool:
-            pool = [r for r in early if r['uid'] not in used
-                    and r['basket'] == new_basket]
-        pool.sort(key=lambda r: (_sem(r), r['uid']))
+        pool = [dict(rec, sem=sem, uid=rec.get('uid') or rec['code'])
+                for sem in range(1, last + 1)
+                for rec in prc.semester_courses(new_batch, program).get(sem, [])
+                if (rec.get('uid') or rec['code']) not in used
+                and (rec.get('uid') or rec['code']) not in seen_add
+                and rec.get('basket') == new_basket and (rec.get('C') or 0) <= need]
         if pool:
             pick = pool[0]
-            used.add(pick['uid'])
+            seen_add.add(pick['uid'])
             additional.append(pick)
-            note = 'closes %s credit shortfall on %s' % (p['shortfall'], p['old'].code)
-            additional[-1]['reason'] = note
-    # any remaining new course the student has not yet reached stays visible
-    for r in early:
-        if r['uid'] not in used:
-            additional.append(dict(r, reason='not covered by the course mapping'))
+            additional[-1]['reason'] = 'closes %s credit shortfall on %s' % (p['shortfall'], p['old'].code)
 
     removal = [c for c in failed if c.code not in mapped_old
                and c.code not in lock] if lock else []

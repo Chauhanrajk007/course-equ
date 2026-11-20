@@ -227,25 +227,26 @@ def _merge(chunks: list[tuple[str, dict]]) -> tuple[list, dict, list]:
                     prev['conflict_with'] = fname
                 prev_grade = prev.get('grade')
                 rec_grade = rec.get('grade')
+                fields_to_sync = ('name', 'credits', 'grade', 'semester', 'month_year', 'term')
                 if rec_grade not in (None, '') and prev_grade not in (None, '') and prev_grade != rec_grade:
                     p_pass = prc.is_passed(prev_grade)
                     r_pass = prc.is_passed(rec_grade)
                     if r_pass and not p_pass:
-                        for k in ('name', 'credits', 'grade', 'semester'):
+                        for k in fields_to_sync:
                             if rec.get(k) not in (None, ''):
                                 prev[k] = rec[k]
                     elif p_pass and not r_pass:
                         pass
                     else:
-                        for k in ('name', 'credits', 'grade', 'semester'):
+                        for k in fields_to_sync:
                             if rec.get(k) not in (None, ''):
                                 prev[k] = rec[k]
                 elif rec_grade not in (None, '') and prev_grade in (None, ''):
-                    for k in ('name', 'credits', 'grade', 'semester'):
+                    for k in fields_to_sync:
                         if rec.get(k) not in (None, ''):
                             prev[k] = rec[k]
                 else:
-                    for k in ('name', 'credits', 'grade', 'semester'):
+                    for k in fields_to_sync:
                         if rec.get(k) not in (None, ''):
                             prev[k] = rec[k]
                 prev.setdefault('also_in', [])
