@@ -142,9 +142,10 @@ def main():
     assert 'Check what was read' in r.get_data(as_text=True)
     mcid = list(web.CASES)[-1]
     n = len(web.CASES[mcid]['records'])
-    if n != 22:
-        print('FAIL  two identical files produced %d rows, expected 22 '
-              '(deduplicated)' % n)
+    expected_n = len(web.parse_transcript('rc.docx', open(RC, 'rb').read())['records'])
+    if n != expected_n:
+        print('FAIL  two identical files produced %d rows, expected %d '
+              '(deduplicated)' % (n, expected_n))
         ok = False
     else:
         print('PASS  two identical files merged and deduplicated (%d rows)' % n)

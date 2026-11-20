@@ -9,11 +9,20 @@ srv.err
 data/*.json
 !data/prc_db.json
 !data/legacy_baskets.json
+!data/prc_grid.xlsx
+!data/.gitkeep
 !.gitkeep
 .venv/
 .vercel/
 tools/_e2e/
+tools/_inspect_*/
+tools/_temp_*/
 package-lock.json
 
 # Student transcripts and annexures - never commit (contains PII).
 new data to train/
+extracted_report_cards/
+interviewiq/
+run_interviewiq.bat
+*.zip
+data/cases/

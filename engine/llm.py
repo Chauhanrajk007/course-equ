@@ -36,28 +36,32 @@ PROVIDERS = {
         'env': 'GROQ_API_KEY',
         'url': 'https://api.groq.com/openai/v1/chat/completions',
         'models': ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant',
-                   'openai/gpt-oss-120b', 'qwen/qwen3-32b'],
+                   'qwen/qwen3-32b', 'llama-3.2-11b-vision-preview'],
         'label': 'Groq',
     },
     'openrouter': {
         'env': 'OPENROUTER_API_KEY',
         'url': 'https://openrouter.ai/api/v1/chat/completions',
-        'models': ['x-ai/grok-4.3', 'openai/gpt-4.1-mini',
+        'models': ['nvidia/nemotron-3.5-lightning:free',
+                   'inclusionai/ling-3.2-flash:free',
+                   'liquid/lfm-3-1.7b:free',
+                   'particle-ai/particle-1:free',
+                   'google/gemma-4-31b-it:free',
+                   'x-ai/grok-4.3', 'openai/gpt-4.1-mini',
                    'google/gemini-2.5-flash', 'anthropic/claude-sonnet-4.5',
                    'openai/gpt-oss-120b', 'meta-llama/llama-3.3-70b-instruct'],
         'label': 'OpenRouter',
     },
 }
-ORDER = ('xai', 'openrouter', 'groq')
-# Image reading needs a multimodal model. The Groq account in use has text
-# models only, so vision defaults to OpenRouter's free models when a key exists.
+ORDER = ('openrouter', 'xai', 'groq')
+# Image reading needs a multimodal model.
 VISION = {
     'openrouter': ['nvidia/nemotron-3.5-super-vl:free',
                    'dots-studio/dots-3-note-preview:free',
                    'google/gemma-4-31b-it:free',
                    'x-ai/grok-4.3'],
     'xai': ['grok-4-fast-non-reasoning', 'grok-4'],
-    'groq': [],
+    'groq': ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'],
 }
 UA = 'CourseEquivalence/1.0 (+presidency university academic cell)'
 # A capped ceiling keeps gateway accounts with a low balance from rejecting the

@@ -39,6 +39,9 @@ from engine.mapping import Course, build_mapping
 from engine.transcript import ParseError, parse_transcript, to_courses
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+_CACHE_DIR = os.environ.get('COURSE_EQUIV_CACHE_DIR') or (
+    '/tmp' if os.environ.get('VERCEL') else os.path.join(BASE, 'data'))
+_CASES_DIR = os.path.join(_CACHE_DIR, 'cases')
 MAX_UPLOAD = 60 * 1024 * 1024          # room for a whole transcript's pages
 MAX_FILES = 24
 IMAGE_EXT = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff')
@@ -99,8 +102,31 @@ def _pick_program(old: str, new: str, requested, roll_no=None) -> str | None:
     return prc.resolve_program(old, None)
 
 
+def _save_case(cid: str, c: dict) -> None:
+    CASES[cid] = c
+    try:
+        os.makedirs(_CASES_DIR, exist_ok=True)
+        c_to_save = dict(c)
+        if 'images' in c_to_save and len(c_to_save['images']) > 10:
+            c_to_save['images'] = c_to_save['images'][:10]
+        # Avoid serializing non-serializable objects if any
+        with open(os.path.join(_CASES_DIR, f'{cid}.json'), 'w', encoding='utf-8') as f:
+            json.dump(c_to_save, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+
 def _case(cid: str) -> dict:
     c = CASES.get(cid)
+    if not c:
+        p = os.path.join(_CASES_DIR, f'{cid}.json')
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    c = json.load(f)
+                    CASES[cid] = c
+            except Exception:
+                pass
     if not c:
         abort(404, 'This case has expired. Please upload the report card again.')
     return c
@@ -331,7 +357,7 @@ def manual():
     c['courses'] = to_courses(records, old, program)
     c['warnings'] = _warnings({'records': records}, records, old, program)
     _recompute(c)
-    CASES[cid] = c
+    _save_case(cid, c)
     session['cid'] = cid
     flash('Recorded %d course(s). Review the mapping before downloading.'
           % len(records), 'ok')
@@ -361,11 +387,11 @@ def upload():
     program = _pick_program(old, new, request.form.get('program'))
 
     chunks, failed, blobs = [], [], {}
-    gap = float(request.form.get('page_gap') or os.environ.get('PAGE_GAP', '1.5'))
+    gap = float(request.form.get('page_gap') or os.environ.get('PAGE_GAP', '0.5'))
     for i, f in enumerate(files):
         raw = f.read()
         ext = os.path.splitext(f.filename)[1].lower()
-        if i and gap:
+        if i and gap and ext in IMAGE_EXT:
             # one image at a time: gateways cap work in flight
             time.sleep(gap)
         try:
@@ -440,7 +466,7 @@ def upload():
                                             % _data_url(blobs[name])})
             except Exception:                                    # noqa: BLE001
                 pass
-    CASES[cid] = c
+    _save_case(cid, c)
     session['cid'] = cid
     return redirect(url_for('confirm', cid=cid))
 
@@ -479,10 +505,12 @@ def add_files(cid):
         return redirect(url_for('confirm', cid=cid))
     chunks, failed = [], []
     for i, f in enumerate(files):
-        if i:
-            time.sleep(float(os.environ.get('PAGE_GAP', '1.5')))
+        raw = f.read()
+        ext = os.path.splitext(f.filename)[1].lower()
+        if i and ext in IMAGE_EXT:
+            time.sleep(float(os.environ.get('PAGE_GAP', '0.5')))
         try:
-            chunks.append((f.filename, _read_one(f.filename, f.read(),
+            chunks.append((f.filename, _read_one(f.filename, raw,
                                                   c['old_batch'],
                                                   c.get('program'))))
         except ValueError as e:
@@ -506,6 +534,7 @@ def add_files(cid):
               % len(failed), 'error')
     flash('Added %d course(s) from %d file(s).'
           % (len(added), len(chunks)), 'ok')
+    _save_case(cid, c)
     return redirect(url_for('confirm', cid=cid))
 
 
@@ -573,6 +602,7 @@ def confirm(cid):
         c['warnings'] = _warnings({'records': out}, out, c['old_batch'],
                                   c.get('program'))
         _recompute(c)
+        _save_case(cid, c)
         return redirect(url_for('review', cid=cid))
 
     rows = []
@@ -628,6 +658,7 @@ def override(cid):
             if val:
                 c['lock'][old_code] = val
     _recompute(c)
+    _save_case(cid, c)
     flash('Mapping updated.', 'ok')
     return redirect(url_for('review', cid=cid))
 
@@ -637,6 +668,7 @@ def toggle_llm(cid):
     c = _case(cid)
     c['use_llm'] = not c.get('use_llm', True)
     _recompute(c)
+    _save_case(cid, c)
     return redirect(url_for('review', cid=cid))
 
 

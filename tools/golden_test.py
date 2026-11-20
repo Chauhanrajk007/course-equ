@@ -62,12 +62,6 @@ def parse_annexure(path: str) -> dict:
             if m:
                 out['new_batch'] = m.group(1)
             continue
-        if low.startswith('|') and 'name of the student' in low:
-            out['name'] = ln.split('|')[-1].strip()
-            continue
-        if low.startswith('|') and 'roll number' in low:
-            out['roll'] = ln.split('|')[-1].strip()
-            continue
 
         if 'failed/np graded courses' in low:
             section = 'II'
@@ -90,6 +84,13 @@ def parse_annexure(path: str) -> dict:
 
         cs = cells(ln)
         if not cs:
+            continue
+
+        if low.startswith('|') and 'name of the student' in low:
+            out['name'] = cs[-1]
+            continue
+        if low.startswith('|') and 'roll number' in low:
+            out['roll'] = cs[-1]
             continue
 
         if section is None and len(cs) == 15 and _code(cs[0]):
