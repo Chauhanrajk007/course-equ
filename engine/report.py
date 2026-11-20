@@ -442,13 +442,13 @@ class Report:
                              P(_sp(s.get('sem')), 'cellc')])
             rows.append([P('', 'cellc'),
                          P('Total credits that may be dropped', 'cellb')]
-                        + [P('', 'cellc')] * 4
+                        + [P('', 'cellc')] * 3
                         + [P('<b>%s</b>' % r['skippable_total'], 'cellb'),
                            P('', 'cellc'), P('', 'cellc')])
             w = PAGE[0] - 2 * M
-            cw = [9, 74, 5, 5, 5, 5, 13]
+            cw = [9, 70, 5, 5, 5, 5, 15, 20]
             cw = [c * mm for c in cw]
-            cw[6] += w - sum(cw)
+            cw[7] += w - sum(cw)
             out += [Spacer(1, 2.5 * mm), self._title(
                 'Course(s) that may be skipped from the semesters ahead (if any)'),
                 _mk(rows, cw),

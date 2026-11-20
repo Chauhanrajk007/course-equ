@@ -35,8 +35,8 @@ PROVIDERS = {
     'groq': {
         'env': 'GROQ_API_KEY',
         'url': 'https://api.groq.com/openai/v1/chat/completions',
-        'models': ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant',
-                   'qwen/qwen3-32b', 'llama-3.2-11b-vision-preview'],
+        'models': ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b',
+                   'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
         'label': 'Groq',
     },
     'openrouter': {
@@ -61,7 +61,7 @@ VISION = {
                    'google/gemma-4-31b-it:free',
                    'x-ai/grok-4.3'],
     'xai': ['grok-4-fast-non-reasoning', 'grok-4'],
-    'groq': ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'],
+    'groq': ['qwen/qwen3.8-27b', 'llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'],
 }
 UA = 'CourseEquivalence/1.0 (+presidency university academic cell)'
 # A capped ceiling keeps gateway accounts with a low balance from rejecting the
