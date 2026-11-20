@@ -110,7 +110,7 @@
   <label class="check">
     <input type="checkbox" name="use_llm" value="1" {% if not llm.available %}disabled{% endif %}>
     <span>
-      Ask AI advisor for a second opinion on ambiguous courses (optional &mdash; adds ~10s)
+      Ask AI advisor for a second opinion on ambiguous courses
       {% if llm.available %}
         <small class="ok">available &mdash; {{ llm.model }}</small>
       {% else %}
@@ -213,21 +213,21 @@ document.addEventListener('DOMContentLoaded', function() {
           s1.className = 'step-item done';
           s2.className = 'step-item active';
         }
-      }, 1500);
+      }, 600);
 
       setTimeout(() => {
         if (s2 && s3) {
           s2.className = 'step-item done';
           s3.className = 'step-item active';
         }
-      }, 4500);
+      }, 1400);
 
       setTimeout(() => {
         if (s3 && s4) {
           s3.className = 'step-item done';
           s4.className = 'step-item active';
         }
-      }, 9000);
+      }, 2200);
     });
   }
 });

@@ -122,7 +122,7 @@
   <label class="check">
     <input type="checkbox" name="use_llm" value="1" {% if c.use_llm %}checked{% endif %}
            {% if not llm.available %}disabled{% endif %}>
-    <span>Ask AI advisor for a second opinion on ambiguous courses (optional &mdash; adds ~10s)
+    <span>Ask AI advisor for a second opinion on ambiguous courses
       {% if llm.available %}<small class="ok">{{ llm.model }}</small>
       {% else %}<small class="muted">off &mdash; no API key</small>{% endif %}</span>
   </label>

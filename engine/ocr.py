@@ -218,13 +218,15 @@ def transcribe_pdf(data: bytes, filename: str, batch: str,
     pages = pages[:limit]
     from PIL import Image
 
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     prompt = _prompt(batch, program, 'the report card on this page')
     cache = _load()
-    merged_rows, identity, uncertain, notes = [], {}, [], []
-    gap = float(os.environ.get('PAGE_GAP', '0.5'))
-    for n, img in enumerate(pages, 1):
-        if n > 1 and gap:
-            time.sleep(gap)
+    cache_lock = threading.Lock()
+
+    def _read_single_page(n_img):
+        n, img = n_img
         buf = io.BytesIO()
         if max(img.size) > MAX_SIDE:
             ratio = MAX_SIDE / float(max(img.size))
@@ -233,11 +235,21 @@ def transcribe_pdf(data: bytes, filename: str, batch: str,
         img.save(buf, 'PNG', optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode()
         key = _cache_key(b64, cfg['model'], batch, program)
-        parsed = cache.get(key)
+        with cache_lock:
+            parsed = cache.get(key)
         if not (use_cache and parsed):
             parsed = _ask(cfg, prompt, b64, 'image/png')
-            cache[key] = {k: parsed.get(k) for k in ('identity', 'rows',
-                                                     'uncertain')}
+            with cache_lock:
+                cache[key] = {k: parsed.get(k) for k in ('identity', 'rows',
+                                                         'uncertain')}
+        return n, parsed
+
+    workers = min(4, len(pages))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        page_results = list(executor.map(_read_single_page, enumerate(pages, 1)))
+
+    merged_rows, identity, uncertain, notes = [], {}, [], []
+    for n, parsed in sorted(page_results, key=lambda x: x[0]):
         for r in (parsed.get('rows') or []):
             if isinstance(r, dict):
                 merged_rows.append(r)
