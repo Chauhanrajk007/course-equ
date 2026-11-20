@@ -625,7 +625,8 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
             continue
         table1.append({'sem': s, 'rows': rows,
                        'new_credits': sum(r['new']['C'] or 0 for r in rows),
-                       'old_credits': sum((r['old'] or {}).get('C') or 0 for r in rows)})
+                       'old_credits': sum((r['old'] or {}).get('C') or 0 for r in rows
+                                          if (r['old'] or {}).get('passed'))})
 
     old_by_code = {}
     for uid, rec in oc_db.items():
@@ -633,10 +634,10 @@ def _assemble(old_batch, new_batch, pairs, failed, exemptions, additional,
 
     # B is the credit the student already earned in the old PRC and carries
     # into the new one through the course mapping: the old-side credits of the
-    # Table I pairs.  Failed courses are absent from `pairs` (they are Table II)
-    # and a pair split across several new courses counts its old course once.
+    # Table I pairs that the student actually passed. Failed courses belong
+    # in Table II (C) and do not count as earned credit.
     b = sum((old_by_code.get(p['old'].code, {}).get('C')
-             or p['old'].credits or 0) for p in pairs)
+             or p['old'].credits or 0) for p in pairs if p['old'].passed)
     c_ = sum((old_by_code.get(x.code, {}).get('C') or x.credits or 0) for x in failed)
     d = sum((old_by_code.get(x.code, {}).get('C') or x.credits or 0) for x in exemptions)
     e_ = sum(r.get('C') or 0 for r in additional)
@@ -795,4 +796,4 @@ def _old_cell(c):
     return {'code': c.code, 'name': c.name, 'L': rec.get('L'), 'T': rec.get('T'),
             'P': rec.get('P'), 'C': credits, 'basket': rec.get('basket'),
             'sem': c.semester, 'grade': c.grade, 'month_year': c.month_year,
-            'term': c.term}
+            'term': c.term, 'passed': bool(c.passed)}
