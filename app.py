@@ -430,9 +430,25 @@ def upload():
         for k in ('model', 'provider', 'dims'):
             meta.setdefault(k, p.get(k))
     # the roll number carries the programme code; use it when the form is blank
+    roll_cand = (request.form.get('roll_no') or ident.get('roll_no') or '').strip()
+    if roll_cand and len(roll_cand) >= 4 and roll_cand[:4].isdigit():
+        roll_batch = prc.resolve_batch(roll_cand[:4])
+        if roll_batch and roll_batch in prc.batches():
+            if roll_batch != old and prc.batch_year(new) > prc.batch_year(roll_batch):
+                old = roll_batch
+                notes.append('Admission batch auto-aligned to %s based on roll number %s.' % (old, roll_cand))
+                for r in records:
+                    rec = prc.course(old, r['code'], program)
+                    if rec:
+                        r['in_prc'] = True
+                        r['prc_basket'] = rec.get('basket')
+                        if not r.get('semester') or r.get('semester') == 1:
+                            r['semester'] = prc.semester_of(old, r['code'], program) or r.get('semester')
+                        if not r.get('credits'):
+                            r['credits'] = rec.get('C')
+
     program = _pick_program(old, new, program or request.form.get('program'),
-                            request.form.get('roll_no')
-                            or ident.get('roll_no'))
+                            roll_cand)
     c = {
         'id': cid, 'old_batch': old, 'new_batch': new,
         'program': program,

@@ -122,6 +122,117 @@
     </span>
   </label>
 
-  <button class="primary" type="submit">Map courses &rarr;</button>
+  <button class="primary" type="submit" id="submitBtn">Map courses &rarr;</button>
 </form>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay" style="display: none;">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <h3 id="loadingTitle">Processing Report Card</h3>
+    <p id="loadingSubtitle">Please wait while the document is analyzed...</p>
+    <div class="steps-progress">
+      <div id="step-1" class="step-item active">&bull; Reading document &amp; extracting pages</div>
+      <div id="step-2" class="step-item">&bull; Transcribing courses, grades &amp; credits</div>
+      <div id="step-3" class="step-item">&bull; Matching against Admission PRC &amp; 2024-2028 PRC</div>
+      <div id="step-4" class="step-item">&bull; Calculating Tables I, II, III, IV &amp; credit formula</div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const fileInput = document.querySelector('input[name="transcripts"]');
+  const oldBatchSelect = document.querySelector('select[name="old_batch"]');
+  const programSelect = document.querySelector('select[name="program"]');
+  const rollInput = document.querySelector('input[name="roll_no"]');
+  const nameInput = document.querySelector('input[name="name"]');
+  const form = document.querySelector('form.card');
+  const overlay = document.getElementById('loadingOverlay');
+
+  // Auto-detect student details from filename when selected
+  if (fileInput) {
+    fileInput.addEventListener('change', function(e) {
+      if (!this.files || this.files.length === 0) return;
+      const filename = this.files[0].name;
+
+      // Extract Roll No (e.g., 20231CAI0045, 20241CIT0082, 2022CAI0160)
+      const rollMatch = filename.match(/\b(20[12]\d[0-9A-Z]*?([A-Z]{3})\d+)\b/i);
+      if (rollMatch) {
+        const fullRoll = rollMatch[1].toUpperCase();
+        const progCode = rollMatch[2].toUpperCase();
+        const yearPrefix = fullRoll.substring(0, 4);
+
+        if (rollInput && !rollInput.value) {
+          rollInput.value = fullRoll;
+        }
+
+        // Set Admission Batch based on student year
+        if (oldBatchSelect) {
+          for (let opt of oldBatchSelect.options) {
+            if (opt.value.startsWith(yearPrefix)) {
+              oldBatchSelect.value = opt.value;
+              break;
+            }
+          }
+        }
+
+        // Set Programme
+        if (programSelect) {
+          for (let opt of programSelect.options) {
+            if (opt.value === progCode) {
+              programSelect.value = progCode;
+              break;
+            }
+          }
+        }
+
+        // Try extracting student name from prefix before roll number
+        if (nameInput && !nameInput.value) {
+          const parts = filename.split(rollMatch[0]);
+          if (parts[0]) {
+            const cleanName = parts[0].replace(/[_-]+/g, ' ').trim();
+            if (cleanName.length > 2) {
+              nameInput.value = cleanName;
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Show loading animation on submit
+  if (form && overlay) {
+    form.addEventListener('submit', function() {
+      overlay.style.display = 'flex';
+      
+      const s1 = document.getElementById('step-1');
+      const s2 = document.getElementById('step-2');
+      const s3 = document.getElementById('step-3');
+      const s4 = document.getElementById('step-4');
+
+      setTimeout(() => {
+        if (s1 && s2) {
+          s1.className = 'step-item done';
+          s2.className = 'step-item active';
+        }
+      }, 1500);
+
+      setTimeout(() => {
+        if (s2 && s3) {
+          s2.className = 'step-item done';
+          s3.className = 'step-item active';
+        }
+      }, 4500);
+
+      setTimeout(() => {
+        if (s3 && s4) {
+          s3.className = 'step-item done';
+          s4.className = 'step-item active';
+        }
+      }, 9000);
+    });
+  }
+});
+</script>
 {% endblock %}
