@@ -439,18 +439,23 @@ def upload():
             if roll_batch != old and prc.batch_year(new) > prc.batch_year(roll_batch):
                 old = roll_batch
                 notes.append('Admission batch auto-aligned to %s based on roll number %s.' % (old, roll_cand))
-                for r in records:
-                    rec = prc.course(old, r['code'], program)
-                    if rec:
-                        r['in_prc'] = True
-                        r['prc_basket'] = rec.get('basket')
-                        if not r.get('semester') or r.get('semester') == 1:
-                            r['semester'] = prc.semester_of(old, r['code'], program) or r.get('semester')
-                        if not r.get('credits'):
-                            r['credits'] = rec.get('C')
 
     program = _pick_program(old, new, program or request.form.get('program'),
                             roll_cand)
+
+    for r in records:
+        rec = prc.course(old, r['code'], program)
+        if rec:
+            r['in_prc'] = True
+            r['prc_basket'] = rec.get('basket')
+            if not r.get('name') or len(str(r['name'])) < 3:
+                r['name'] = rec.get('name') or r.get('name')
+            if not r.get('semester') or r.get('semester') == 1:
+                r['semester'] = prc.semester_of(old, r['code'], program) or r.get('semester')
+            if not r.get('credits'):
+                r['credits'] = rec.get('C')
+        else:
+            r['in_prc'] = False
     c = {
         'id': cid, 'old_batch': old, 'new_batch': new,
         'program': program,
@@ -628,10 +633,11 @@ def confirm(cid):
 
     rows = []
     for r in c['records']:
+        rec = prc.course(c['old_batch'], r['code'], c.get('program'))
         rows.append({**r,
-                     'prc_name': (prc.course(c['old_batch'], r['code'],
-                                             c.get('program')) or {}).get('name')
-                                 or ''})
+                     'in_prc': bool(rec),
+                     'prc_basket': (rec or {}).get('basket') if rec else r.get('prc_basket'),
+                     'prc_name': (rec or {}).get('name') or r.get('name') or ''})
     return render_template('confirm.html', c=c, rows=rows,
                            programs=_programs_for_ui(), llm=llm.status())
 
