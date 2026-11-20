@@ -17,7 +17,6 @@ data/*.json
 tools/_e2e/
 tools/_inspect_*/
 tools/_temp_*/
-package-lock.json
 
 # Student transcripts and annexures - never commit (contains PII).
 new data to train/
