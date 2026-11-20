@@ -122,15 +122,27 @@
   <label class="check">
     <input type="checkbox" name="use_llm" value="1" {% if c.use_llm %}checked{% endif %}
            {% if not llm.available %}disabled{% endif %}>
-    <span>Ask Grok for a second opinion on courses the rules cannot place
-      confidently
+    <span>Ask AI advisor for a second opinion on ambiguous courses (optional &mdash; adds ~10s)
       {% if llm.available %}<small class="ok">{{ llm.model }}</small>
       {% else %}<small class="muted">off &mdash; no API key</small>{% endif %}</span>
   </label>
 
-  <button class="primary" type="submit">Confirm and map courses &rarr;</button>
+  <button class="primary" type="submit" id="confirmBtn">Confirm and map courses &rarr;</button>
   <a class="btn ghost" href="{{ url_for('index') }}">Start over</a>
 </form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const form = document.querySelector('form');
+  const btn = document.getElementById('confirmBtn');
+  if (form && btn) {
+    form.addEventListener('submit', function() {
+      btn.innerText = 'Calculating Tables & Formula...';
+      btn.style.opacity = '0.7';
+    });
+  }
+});
+</script>
 
 {% if c.images %}
 <details class="card">

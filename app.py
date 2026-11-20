@@ -136,7 +136,7 @@ def _recompute(c: dict) -> dict:
     c['result'] = build_mapping(
         c['old_batch'], c['new_batch'], c['courses'],
         last_completed_sem=c.get('last_sem') or None,
-        lock=c.get('lock'), use_llm=c.get('use_llm', True),
+        lock=c.get('lock'), use_llm=c.get('use_llm', False),
         program=c.get('program'))
     return c['result']
 
@@ -683,7 +683,7 @@ def override(cid):
 @app.route('/review/<cid>/toggle_llm', methods=['GET', 'POST'])
 def toggle_llm(cid):
     c = _case(cid)
-    c['use_llm'] = not c.get('use_llm', True)
+    c['use_llm'] = not c.get('use_llm', False)
     _recompute(c)
     _save_case(cid, c)
     return redirect(url_for('review', cid=cid))

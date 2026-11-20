@@ -110,14 +110,13 @@
   </div>
 
   <label class="check">
-    <input type="checkbox" name="use_llm" value="1" {% if llm.available %}checked{% endif %}
-           {% if not llm.available %}disabled{% endif %}>
+    <input type="checkbox" name="use_llm" value="1" {% if not llm.available %}disabled{% endif %}>
     <span>
-      Ask Grok for a second opinion on courses the rules cannot place confidently
+      Ask AI advisor for a second opinion on ambiguous courses (optional &mdash; adds ~10s)
       {% if llm.available %}
-        <small class="ok">active &mdash; {{ llm.model }}</small>
+        <small class="ok">available &mdash; {{ llm.model }}</small>
       {% else %}
-        <small class="muted">off &mdash; set <code>XAI_API_KEY</code> to enable</small>
+        <small class="muted">off &mdash; set API key to enable</small>
       {% endif %}
     </span>
   </label>
