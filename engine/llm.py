@@ -295,9 +295,21 @@ def _post(url: str, body: bytes, headers: dict, timeout: int = 120):
                     % (url.split('/')[2], _provider() or 'the key'))
             if e.code in (402, 408, 409, 429, 500, 502, 503, 529):
                 budget = 'in_flight_budget_exhausted' in detail
-                # a budget rejection needs a longer settle than a rate limit
-                base = 6.0 if budget else 1.5
-                time.sleep(base * (2 ** attempt))
+                delay = None
+                m = re.search(r'try again in ([0-9.]+)s', detail, re.IGNORECASE)
+                if m:
+                    try:
+                        delay = float(m.group(1)) + 1.0
+                    except ValueError:
+                        delay = None
+                if delay is None:
+                    retry_after = e.headers.get('Retry-After') if hasattr(e, 'headers') and e.headers else None
+                    if retry_after and retry_after.replace('.', '', 1).isdigit():
+                        delay = float(retry_after) + 1.0
+                if delay is None:
+                    base = 6.0 if budget else 2.5
+                    delay = base * (2 ** attempt)
+                time.sleep(delay)
                 continue
             raise RuntimeError('HTTP %s from %s: %s'
                                % (e.code, url.split('/')[2], detail[:300]))

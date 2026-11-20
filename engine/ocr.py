@@ -221,7 +221,10 @@ def transcribe_pdf(data: bytes, filename: str, batch: str,
     prompt = _prompt(batch, program, 'the report card on this page')
     cache = _load()
     merged_rows, identity, uncertain, notes = [], {}, [], []
+    gap = float(os.environ.get('PAGE_GAP', '0.5'))
     for n, img in enumerate(pages, 1):
+        if n > 1 and gap:
+            time.sleep(gap)
         buf = io.BytesIO()
         if max(img.size) > MAX_SIDE:
             ratio = MAX_SIDE / float(max(img.size))
