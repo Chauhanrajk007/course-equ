@@ -54,7 +54,7 @@ PROVIDERS = {
         'label': 'OpenRouter',
     },
 }
-ORDER = ('openrouter', 'xai', 'groq')
+ORDER = ('groq', 'openrouter', 'xai')
 # Image reading needs a multimodal model.
 VISION = {
     'openrouter': ['nvidia/nemotron-3.5-super-vl:free',

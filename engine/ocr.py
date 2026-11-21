@@ -175,6 +175,109 @@ def _ask(cfg, prompt: str, b64: str, mime: str) -> dict:
         raise RuntimeError('The AI service did not return usable JSON.')
 
 
+_rapid_engine = None
+
+def _get_rapid_engine():
+    global _rapid_engine
+    if _rapid_engine is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _rapid_engine = RapidOCR()
+        except Exception:
+            _rapid_engine = False
+    return _rapid_engine if _rapid_engine is not False else None
+
+CODE_RE = re.compile(r'^[A-Z]{3,4}\d{3,4}[A-Z]?$')
+GRADE_RE = re.compile(r'^(O|A\+|A|B\+|B|C|D|F|S|U|I|RC|NP|NC|NE)$', re.I)
+
+def parse_with_rapid(img, batch: str, program: str | None = None) -> dict | None:
+    engine = _get_rapid_engine()
+    if not engine:
+        return None
+    try:
+        from PIL import Image
+        import numpy as np
+        if isinstance(img, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(img)).convert('RGB')
+        elif not isinstance(img, Image.Image):
+            return None
+        arr = np.array(img)
+        result, _ = engine(arr)
+        if not result:
+            return None
+        texts = [item[1].strip() for item in result]
+        full_text = '\n'.join(texts)
+
+        identity = {}
+        m_name = re.search(r'Student\s*Name\s*[:\-]?\s*([A-Za-z\s]+)', full_text, re.I)
+        if m_name:
+            name_clean = m_name.group(1).split('\n')[0].strip()
+            name_clean = re.sub(r'^(Father|Mother|Batch|Roll).*', '', name_clean, flags=re.I).strip()
+            if name_clean:
+                identity['name'] = name_clean
+        m_roll = re.search(r'Roll\s*Number\s*[:\-]?\s*([0-9]{4,5}[A-Za-z0-9]+)', full_text, re.I)
+        if m_roll:
+            identity['roll_no'] = m_roll.group(1).upper().replace('L', 'I')
+        m_sem = re.search(r'(First|Second|Third|Fourth|Fifth|Sixth|Seventh|Eighth|[1-8])\s*Semester', full_text, re.I)
+        sem_map = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8}
+        sem_val = sem_map.get(m_sem.group(1).lower()) if m_sem else None
+        if sem_val:
+            identity['semester'] = sem_val
+
+        # Cluster items by horizontal line (y-proximity)
+        items = []
+        for box, text, score in result:
+            y_center = sum(pt[1] for pt in box) / 4.0
+            x_left = min(pt[0] for pt in box)
+            items.append({'y': y_center, 'x': x_left, 'text': text.strip()})
+
+        items.sort(key=lambda it: it['y'])
+        line_clusters = []
+        for it in items:
+            placed = False
+            for cluster in line_clusters:
+                if abs(cluster['y'] - it['y']) < 18:
+                    cluster['items'].append(it)
+                    cluster['y'] = sum(x['y'] for x in cluster['items']) / len(cluster['items'])
+                    placed = True
+                    break
+            if not placed:
+                line_clusters.append({'y': it['y'], 'items': [it]})
+
+        rows = []
+        seen = set()
+        for cluster in line_clusters:
+            cluster['items'].sort(key=lambda it: it['x'])
+            c_texts = [it['text'] for it in cluster['items']]
+            code = None
+            for txt in c_texts:
+                norm_t = prc.norm(txt)
+                if CODE_RE.match(norm_t) and not code:
+                    code = norm_t
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            name, credits, grade = '', None, None
+            for txt in c_texts:
+                if txt.isdigit() and len(txt) == 1 and credits is None:
+                    credits = int(txt)
+                elif GRADE_RE.match(txt) and grade is None:
+                    grade = txt.upper()
+                elif not name and len(txt) > 2 and not CODE_RE.match(prc.norm(txt)) and not txt.isdigit():
+                    name = txt
+            rec = prc.course(batch, code, program)
+            if rec:
+                name = name or rec.get('name')
+                credits = credits or rec.get('C')
+                row_sem = sem_val or prc.semester_of(batch, code, program)
+            else:
+                row_sem = sem_val
+            rows.append({'code': code, 'name': name, 'credits': credits, 'grade': grade, 'semester': row_sem})
+        return {'identity': identity, 'rows': rows, 'uncertain': []} if rows else None
+    except Exception:
+        return None
+
+
 def _vision_cfg_or_raise():
     cfg = llm.vision_cfg()
     if not cfg:
@@ -192,6 +295,17 @@ def transcribe(data: bytes, filename: str, batch: str,
     # validate the file before anything else, so a corrupt upload is reported as
     # such even when no AI key is configured
     b64, mime, dims = prepare(data)
+
+    # 1. Try RapidOCR (PaddleOCR local) first
+    rapid_parsed = parse_with_rapid(data, batch, program)
+    if rapid_parsed and rapid_parsed.get('rows'):
+        out = _normalise(rapid_parsed, batch, program)
+        out.update({'source': 'image', 'filename': filename, 'model': 'rapidocr-paddle',
+                    'provider': 'RapidOCR (PaddleOCR Local)', 'dims': dims, 'cached': False,
+                    'transcribed_at': time.strftime('%Y-%m-%d %H:%M')})
+        return out
+
+    # 2. Fall back to cloud vision
     cfg = _vision_cfg_or_raise()
 
     key = _cache_key(b64, cfg['model'], batch, program)
@@ -232,7 +346,45 @@ def pdf_page_images(data: bytes, dpi: int = 150) -> list:
 
 def transcribe_pdf(data: bytes, filename: str, batch: str,
                    program: str | None = None, use_cache: bool = True) -> dict:
-    """Read a scanned PDF page by page with the vision model."""
+    """Read a scanned PDF page by page with RapidOCR or vision model."""
+    pages = pdf_page_images(data)
+    if not pages:
+        raise ValueError('The PDF has no pages to read.')
+    total_pages = len(pages)
+    limit = int(os.environ.get('COURSE_EQUIV_MAX_PAGES', '60'))
+    truncated = total_pages > limit
+    pages = pages[:limit]
+
+    # 1. Try RapidOCR (PaddleOCR local) on the pages
+    engine = _get_rapid_engine()
+    if engine:
+        rapid_pages = []
+        for p in pages:
+            r = parse_with_rapid(p, batch, program)
+            if r and r.get('rows'):
+                rapid_pages.append(r)
+        if len(rapid_pages) == len(pages) and rapid_pages:
+            merged_rows, identity, uncertain, notes = [], {}, [], []
+            for parsed in rapid_pages:
+                for r in (parsed.get('rows') or []):
+                    if isinstance(r, dict):
+                        merged_rows.append(r)
+                for k, v in (parsed.get('identity') or {}).items():
+                    if v not in (None, '') and identity.get(k) in (None, ''):
+                        identity[k] = v
+            if truncated:
+                notes.append('Only the first %d pages were read; the PDF has %d.'
+                             % (limit, total_pages))
+            out = _normalise({'identity': identity, 'rows': merged_rows,
+                              'uncertain': uncertain}, batch, program)
+            out['notes'] = notes + out['notes']
+            out.update({'source': 'pdf-scan', 'filename': filename, 'model': 'rapidocr-paddle',
+                        'provider': 'RapidOCR (PaddleOCR Local)', 'dims': '%d page(s)' % len(pages),
+                        'cached': False,
+                        'transcribed_at': time.strftime('%Y-%m-%d %H:%M')})
+            return out
+
+    # 2. Fall back to cloud vision
     cfg = _vision_cfg_or_raise()
     pages = pdf_page_images(data)
     if not pages:
