@@ -119,13 +119,20 @@ def clean(v) -> str:
     return ' '.join(str(v or '').replace('\u00a0', ' ').split())
 
 
+IGNORED_PREFIXES = {'TERM', 'YEAR', 'JULY', 'JUNE', 'DATE', 'EXAM', 'SEME', 'SEMS',
+                    'PAGE', 'SLNO', 'NOTE', 'CODE', 'MARK', 'ROLL', 'PASS', 'FAIL'}
+
+
 def find_code(cell: str):
     m = CODE_RE.search(clean(cell).upper().replace(' ', ' '))
     if not m:
         m = CODE_RE.search(clean(cell).upper())
     if not m:
         return None
-    return (m.group(1) + m.group(2)).upper()
+    prefix = m.group(1).upper()
+    if prefix in IGNORED_PREFIXES:
+        return None
+    return (prefix + m.group(2)).upper()
 
 
 def parse_sem(text: str):

@@ -202,7 +202,7 @@ kunduru_meta = {
 
 kunduru_sections = [
     {
-        'title': 'First Semester Grade Report (Winter Term 2022-2023)',
+        'title': 'First Semester Grade Report',
         'sem_num': 1,
         'courses': [
             {'code': 'CIV1008', 'name': 'Basic Engineering Sciences', 'credits': 2, 'grade': 'D', 'semester': 1},
@@ -215,7 +215,7 @@ kunduru_sections = [
         ]
     },
     {
-        'title': 'Second Semester Grade Report (Monsoon Term 2023)',
+        'title': 'Second Semester Grade Report',
         'sem_num': 2,
         'courses': [
             {'code': 'CHE1018', 'name': 'Environmental Science', 'credits': 2, 'grade': 'S', 'semester': 2},
@@ -231,13 +231,13 @@ kunduru_sections = [
         ]
     },
     {
-        'title': 'Third Semester Grade Report (Winter Term 2023-2024)',
+        'title': 'Third Semester Grade Report',
         'sem_num': 3,
         'courses': [
             {'code': 'CSE1005', 'name': 'Programming in Python', 'credits': 3, 'grade': 'B+', 'semester': 3},
             {'code': 'CSE2001', 'name': 'Data Structures and Algorithms', 'credits': 4, 'grade': 'B', 'semester': 3},
             {'code': 'CSE2009', 'name': 'Computer Organization and Architecture', 'credits': 3, 'grade': 'C', 'semester': 3},
-            {'code': 'CSE2014', 'name': 'Software Engineering (Re-attempt)', 'credits': 3, 'grade': 'B', 'semester': 3},
+            {'code': 'CSE2014', 'name': 'Software Engineering', 'credits': 3, 'grade': 'B', 'semester': 3},
             {'code': 'CSE3155', 'name': 'Data Communications and Computer Networks', 'credits': 4, 'grade': 'B', 'semester': 3},
             {'code': 'ECE2011', 'name': 'Innovative Projects Using Raspberry Pi', 'credits': 1, 'grade': 'A+', 'semester': 3},
             {'code': 'MAT1002', 'name': 'Transform Techniques, Partial Differential Equations and Their Applications', 'credits': 3, 'grade': 'F', 'semester': 3},
@@ -245,7 +245,7 @@ kunduru_sections = [
         ]
     },
     {
-        'title': 'Fourth Semester Grade Report (Monsoon Term 2024)',
+        'title': 'Fourth Semester Grade Report',
         'sem_num': 4,
         'courses': [
             {'code': 'CSE2007', 'name': 'Design and Analysis of Algorithms', 'credits': 3, 'grade': 'D', 'semester': 4},
@@ -260,7 +260,7 @@ kunduru_sections = [
         ]
     },
     {
-        'title': 'Summer Term / Supplementary Examination (July 2023)',
+        'title': 'Summer Term Supplementary Examination',
         'sem_num': 2,
         'courses': [
             {'code': 'CSE1001', 'name': 'Problem Solving using JAVA', 'credits': 3, 'grade': 'F', 'semester': 2},
@@ -269,14 +269,14 @@ kunduru_sections = [
         ]
     },
     {
-        'title': 'Make-Up Examination (January 2024)',
+        'title': 'Make-Up Examination (Re-Attempt)',
         'sem_num': 2,
         'courses': [
             {'code': 'CSE1001', 'name': 'Problem Solving using JAVA', 'credits': 3, 'grade': 'C', 'semester': 2},
         ]
     },
     {
-        'title': 'Semester IV Special Examination / Additional Term (June 2024)',
+        'title': 'Special Examination (Additional Courses)',
         'sem_num': 4,
         'courses': [
             {'code': 'CSE3078', 'name': 'Cryptography and Network Security', 'credits': 3, 'grade': 'C', 'semester': 4},
