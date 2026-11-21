@@ -126,13 +126,11 @@
 <div id="loadingOverlay" class="loading-overlay" style="display: none;">
   <div class="loading-box">
     <div class="spinner"></div>
-    <h3 id="loadingTitle">Processing Report Card</h3>
-    <p id="loadingSubtitle">Please wait while the document is analyzed...</p>
-    <div class="steps-progress">
-      <div id="step-1" class="step-item active">&bull; Reading document &amp; extracting pages</div>
-      <div id="step-2" class="step-item">&bull; Transcribing courses, grades &amp; credits</div>
-      <div id="step-3" class="step-item">&bull; Matching against Admission PRC &amp; 2024-2028 PRC</div>
-      <div id="step-4" class="step-item">&bull; Calculating Tables I, II, III, IV &amp; credit formula</div>
+    <h3 id="loadingTitle">Reading Report Card</h3>
+    <p id="loadingSubtitle">Extracting courses, grades &amp; credits...</p>
+    <div style="margin-top: 15px; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
+      Matching against curriculum database.<br>
+      Digital files load in &lt;1 second.
     </div>
   </div>
 </div>
@@ -202,32 +200,6 @@ document.addEventListener('DOMContentLoaded', function() {
   if (form && overlay) {
     form.addEventListener('submit', function() {
       overlay.style.display = 'flex';
-      
-      const s1 = document.getElementById('step-1');
-      const s2 = document.getElementById('step-2');
-      const s3 = document.getElementById('step-3');
-      const s4 = document.getElementById('step-4');
-
-      setTimeout(() => {
-        if (s1 && s2) {
-          s1.className = 'step-item done';
-          s2.className = 'step-item active';
-        }
-      }, 600);
-
-      setTimeout(() => {
-        if (s2 && s3) {
-          s2.className = 'step-item done';
-          s3.className = 'step-item active';
-        }
-      }, 1400);
-
-      setTimeout(() => {
-        if (s3 && s4) {
-          s3.className = 'step-item done';
-          s4.className = 'step-item active';
-        }
-      }, 2200);
     });
   }
 });
