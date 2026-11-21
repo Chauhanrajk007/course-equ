@@ -419,10 +419,11 @@ def upload():
 
     last_sem = (request.form.get('last_sem') or '').strip()
     if not last_sem.isdigit():
-        last_sem = str(max([r.get('semester') or 0 for r in records] or [0]))
+        id_sem = str(ident.get('semester') or '').strip()
+        last_sem = id_sem if id_sem.isdigit() else str(max([r.get('semester') or 0 for r in records] or [0]))
     readmit_sem = (request.form.get('readmit_sem') or '').strip()
     if not readmit_sem.isdigit():
-        readmit_sem = str(min(8, int(last_sem) + 1))
+        readmit_sem = str(min(8, int(last_sem) + 1 if int(last_sem) > 0 else 1))
 
     is_image = all(os.path.splitext(n)[1].lower() in IMAGE_EXT
                    for n, _ in chunks)

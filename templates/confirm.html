@@ -15,6 +15,7 @@
     </p>
   </div>
   <div class="hero-actions">
+    <button class="btn primary" type="submit" form="confirmForm">Confirm &amp; Map Courses &rarr;</button>
     <button class="btn ghost" type="button" onclick="document.getElementById('more').open=true">
       + Add more pages</button>
   </div>
@@ -29,6 +30,13 @@
   already merged and will not be read twice.
 </div>
 {% endif %}
+
+<div class="notice ok" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 16px 0;">
+  <div>
+    <strong>Courses Extracted:</strong> Review the transcribed courses below. Click <b>Confirm &amp; Map Courses</b> to view the full Annexure A Equivalence Mapping (Tables I, II, III, IV &amp; Credit Formula).
+  </div>
+  <button class="btn primary" type="submit" form="confirmForm" style="white-space: nowrap;">Confirm &amp; Map Courses &rarr;</button>
+</div>
 
 <details id="more" class="card">
   <summary><b>Attach or re-attach report-card pages</b> &mdash; other semesters,
@@ -53,7 +61,7 @@
 </div>
 {% endif %}
 
-<form method="post" action="{{ url_for('confirm', cid=c.id) }}" class="card">
+<form method="post" action="{{ url_for('confirm', cid=c.id) }}" class="card" id="confirmForm">
   <p class="muted">Nothing is mapped until you confirm. Correct any misread code,
      grade or semester, untick anything that should be ignored, then continue.
      {%- if c.filenames|length > 1 %} The <b>Page</b> column shows which file each
@@ -127,7 +135,7 @@
       {% else %}<small class="muted">off &mdash; no API key</small>{% endif %}</span>
   </label>
 
-  <button class="primary" type="submit" id="confirmBtn">Confirm and map courses &rarr;</button>
+  <button class="primary" type="submit" id="confirmBtn">Confirm &amp; View Annexure A Mapping &rarr;</button>
   <a class="btn ghost" href="{{ url_for('index') }}">Start over</a>
 </form>
 

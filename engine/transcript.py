@@ -136,7 +136,14 @@ def find_code(cell: str):
 
 
 def parse_sem(text: str):
-    m = SEM_RE.search(clean(text))
+    if not text:
+        return None
+    s = clean(text).strip()
+    if s.isdigit() and 1 <= int(s) <= 8:
+        return int(s)
+    if s.upper() in ROMAN:
+        return ROMAN[s.upper()]
+    m = SEM_RE.search(s)
     if not m:
         return None
     g = m.group(1).upper()
